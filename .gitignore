@@ -1,0 +1,6 @@
+figures/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.vscode/
