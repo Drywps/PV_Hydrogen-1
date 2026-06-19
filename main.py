@@ -38,7 +38,6 @@
 
 import pandas as pd
 import matplotlib.pyplot as plt
-import numpy as np
 #
 import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
