@@ -1,6 +1,6 @@
 # Curtailment-to-Hydrogen Techno-Economic Model for Cyprus
 
-PV Curtailment ratio in Cyprus increased from 11.65% (2022) to 47.44% (2025), indicating that flexibility solutions such as batteries demand response, and hydrogen storage will become increasingly important.
+PV Curtailment ratio in Cyprus increased from 11.65% (2022) to 47.44% (2025), indicating that flexibility solutions such as batteries, demand response, and hydrogen storage will become increasingly important.
 
 This project evaluates whether curtailed photovoltaic electricity from a 10 MWp PV plant in Cyprus can be converted into green hydrogen using PEM electrolysis. 
 
