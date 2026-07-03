@@ -168,15 +168,14 @@ def calculate_simple_lcoh(pem_capex_eur, annual_opex, annual_h2_kg, project_life
     1. NO DISCOUNTING:
        Future costs are not discounted to present value.
        A proper discounted LCOH uses an annuity factor instead of
-       a simple sum of years.
+       a simple sum of years. See calculate_discounted_lcoh() below,
+       which is now implemented and used alongside this function
+       throughout the model.
        At 8% discount rate over 15 years:
          - Annuity factor = 8.56  (vs simple sum = 15.0)
          - Ratio = 15.0 / 8.56 = 1.75
-       This means the CAPEX component of LCOH is understated by ~75%.
-       Estimated impact on base case (1 MW, 1000 €/kW, 15,141 kg/year):
-         Simple LCOH   ~6.38 €/kg
-         Discounted LCOH (CAPEX component corrected) ~8.5-9.5 €/kg
-         Underestimation: approximately +2 to +3 €/kg
+       This means the CAPEX component of this simple LCOH is
+       understated relative to the discounted version.
 
     2. NO STACK REPLACEMENT:
        PEM stacks require replacement at approximately year 7-10,
@@ -201,6 +200,62 @@ def calculate_simple_lcoh(pem_capex_eur, annual_opex, annual_h2_kg, project_life
     total_lifetime_h2 = annual_h2_kg * project_lifetime_years
     lcoh = total_lifetime_cost / total_lifetime_h2
     return lcoh
+
+
+def calculate_discounted_lcoh(pem_capex_eur, annual_opex, annual_h2_kg,
+        discount_rate, project_lifetime_years):
+    """
+    Discounted LCOH, replacing the estimate previously carried only in the
+    calculate_simple_lcoh() docstring.
+
+    Standard discounted-cost-stream LCOH definition (constant annual OPEX
+    and constant annual H2 output):
+
+        LCOH = (CAPEX + OPEX * AF) / (H2_annual * AF)
+
+    where AF is the annuity factor, AF = 1 / CRF. Dividing numerator and
+    denominator by AF collapses this to:
+
+        LCOH = (CAPEX * CRF + OPEX) / H2_annual
+             = (Annualized CAPEX + OPEX) / H2_annual
+
+    i.e. the same Capital Recovery Factor already used elsewhere in this
+    script to annualize CAPEX for NPV reporting. This keeps the discounting
+    treatment consistent across the whole model instead of introducing a
+    second, separate discounting method just for LCOH.
+    """
+    crf = (discount_rate * (1 + discount_rate) ** project_lifetime_years) / \
+          ((1 + discount_rate) ** project_lifetime_years - 1)
+    annualized_capex = pem_capex_eur * crf
+    lcoh = (annualized_capex + annual_opex) / annual_h2_kg
+    return lcoh
+
+
+def calculate_discounted_lcoh_for_capex_scenarios(selected_pem_mw, annual_h2_kg,
+        pem_capex_scenarios, discount_rate, project_lifetime_years):
+    lcoh_results = []
+    for capex_per_kw in pem_capex_scenarios:
+        pem_capex_eur = selected_pem_mw * 1000 * capex_per_kw
+        annual_opex = pem_capex_eur * opex_fraction
+        lcoh = calculate_discounted_lcoh(pem_capex_eur, annual_opex, annual_h2_kg,
+                discount_rate, project_lifetime_years)
+        lcoh_results.append(lcoh)
+    return lcoh_results
+
+
+def calculate_discounted_lcoh_vs_grid_limit(df, grid_limits_mw, selected_pem_mw,
+        discount_rate, project_lifetime_years):
+    results = []
+    for grid_limit_mw in grid_limits_mw:
+        curtailed_power_w, curtailed_energy_mwh = calculate_hourly_curtailment(df, grid_limit_mw)
+        pem_input_w = curtailed_power_w.clip(upper=selected_pem_mw * 1_000_000)
+        annual_h2_kg = pem_input_w.sum() / 1_000_000 * 1000 / kwh_per_kg_h2
+        pem_capex_eur = selected_pem_mw * 1000 * pem_capex_per_kw
+        annual_opex = pem_capex_eur * opex_fraction
+        lcoh = calculate_discounted_lcoh(pem_capex_eur, annual_opex, annual_h2_kg,
+                discount_rate, project_lifetime_years)
+        results.append(lcoh)
+    return results
 
 
 def calculate_lcoh_for_capex_scenarios(selected_pem_mw, annual_h2_kg, pem_capex_scenarios):
@@ -341,13 +396,16 @@ def plot_monthly_hydrogen(monthly_h2_kg):
     plt.savefig(os.path.join(FIGURES_DIR, f"figure{fig_number:02d}_monthly_hydrogen.png"), dpi=300, bbox_inches="tight")
     plt.show()
 
-def plot_lcoh_vs_grid_limit(grid_limits_mw, lcoh_grid_sensitivity):
+def plot_lcoh_vs_grid_limit(grid_limits_mw, lcoh_grid_sensitivity, discounted_lcoh_grid_sensitivity=None):
     fig_number, fig_title = next_fig("LCOH vs Grid Export Limit")
     plt.figure(figsize=(8, 5))
-    plt.plot(grid_limits_mw, lcoh_grid_sensitivity, marker="o")
+    plt.plot(grid_limits_mw, lcoh_grid_sensitivity, marker="o", label="Simple (undiscounted) LCOH")
+    if discounted_lcoh_grid_sensitivity is not None:
+        plt.plot(grid_limits_mw, discounted_lcoh_grid_sensitivity, marker="s", label="Discounted LCOH")
     plt.title(fig_title)
     plt.xlabel("Grid Limit (MW)")
     plt.ylabel("LCOH (€/kg H2)")
+    plt.legend()
     plt.grid()
     plt.gca().invert_xaxis()
     plt.yscale("log")
@@ -507,8 +565,14 @@ net_hydrogen_value_with_opex = hydrogen_revenue_eur - annualized_pem_capex - ann
 
 # LCOH
 simple_lcoh = calculate_simple_lcoh(pem_capex_eur, annual_opex, selected_h2_kg, project_lifetime_years)
+discounted_lcoh = calculate_discounted_lcoh(pem_capex_eur, annual_opex, selected_h2_kg,
+        discount_rate, project_lifetime_years)
 lcoh_capex_sensitivity = calculate_lcoh_for_capex_scenarios(selected_pem_mw, selected_h2_kg, pem_capex_scenarios)
 lcoh_grid_sensitivity = calculate_lcoh_vs_grid_limit(df, grid_limits_mw, selected_pem_mw)
+discounted_lcoh_capex_sensitivity = calculate_discounted_lcoh_for_capex_scenarios(
+        selected_pem_mw, selected_h2_kg, pem_capex_scenarios, discount_rate, project_lifetime_years)
+discounted_lcoh_grid_sensitivity = calculate_discounted_lcoh_vs_grid_limit(
+        df, grid_limits_mw, selected_pem_mw, discount_rate, project_lifetime_years)
 
 # ===== BENCHMARK COMPARISON =====
 # Curtailment-to-H2 LCOH is compared against literature values
@@ -533,16 +597,17 @@ print(f"Simple net hydrogen value (€): {simple_net_hydrogen_value:,.0f}")
 print(f"Annual OPEX (€): {annual_opex:,.0f}")
 print(f"Net hydrogen value with OPEX (€): {net_hydrogen_value_with_opex:,.0f}")
 print(f"Simple LCOH (€/kg H2): {simple_lcoh:.2f}")
+print(f"Discounted LCOH (€/kg H2): {discounted_lcoh:.2f}  [CRF={crf:.4f}, using Annualized CAPEX + OPEX / H2]")
 
-print("LCOH CAPEX Sensitivity:")
-for capex, lcoh in zip(pem_capex_scenarios, lcoh_capex_sensitivity):
-    print(f"  CAPEX {capex} €/kW -> LCOH {lcoh:.2f} €/kg H2")
+print("LCOH CAPEX Sensitivity (simple / discounted):")
+for capex, lcoh_s, lcoh_d in zip(pem_capex_scenarios, lcoh_capex_sensitivity, discounted_lcoh_capex_sensitivity):
+    print(f"  CAPEX {capex} €/kW -> Simple {lcoh_s:.2f} / Discounted {lcoh_d:.2f} €/kg H2")
 
-print("\nLCOH Grid Limit Sensitivity:")
-for grid_limit, lcoh in zip(grid_limits_mw, lcoh_grid_sensitivity):
-    print(f"  Grid limit {grid_limit} MW -> LCOH {lcoh:.2f} €/kg H2")
+print("\nLCOH Grid Limit Sensitivity (simple / discounted):")
+for grid_limit, lcoh_s, lcoh_d in zip(grid_limits_mw, lcoh_grid_sensitivity, discounted_lcoh_grid_sensitivity):
+    print(f"  Grid limit {grid_limit} MW -> Simple {lcoh_s:.2f} / Discounted {lcoh_d:.2f} €/kg H2")
 
-print(f"Curtailment-to-H2 LCOH (this model):            {simple_lcoh:.2f} €/kg H2")
+print(f"Curtailment-to-H2 LCOH (this model, discounted):  {discounted_lcoh:.2f} €/kg H2")
 print(f"Dedicated PV-to-H2 LCOH (literature benchmark): {benchmark_dedicated_lcoh_low:.1f} - {benchmark_dedicated_lcoh_high:.1f} €/kg H2")
 print(f"Note: curtailment LCOH reflects low utilization ({utilization_results[1]:.2f}%), not low electricity cost")
 
@@ -596,7 +661,7 @@ plot_capex_intensity(results_table[capex_cols])
 monthly_h2_kg = calculate_monthly_hydrogen(df)
 plot_monthly_hydrogen(monthly_h2_kg)
 
-plot_lcoh_vs_grid_limit(grid_limits_mw, lcoh_grid_sensitivity)
+plot_lcoh_vs_grid_limit(grid_limits_mw, lcoh_grid_sensitivity, discounted_lcoh_grid_sensitivity)
 plot_npv_vs_hydrogen_price(hydrogen_price_scenarios, npv_results)
 plot_npv_vs_grid_limit(grid_limits_mw, npv_grid_results)
 plot_npv_heatmap(npv_df)
@@ -649,10 +714,11 @@ print("Hydrogen-from-curtailment is technically feasible but economically margin
 # PEM Utilization: 8.99%  (1,127 operating hours/year)
 #   This is the critical economic driver — extremely low asset utilization.
 #
-# Simple LCOH: 6.38 €/kg H2
-# (Undiscounted lower bound — see calculate_simple_lcoh docstring for breakdown)
-# True LCOH would likely be higher after discounting,
-# stack replacement, degradation, compression and storage.
+# Simple LCOH: 6.38 €/kg H2 (undiscounted lower bound)
+# Discounted LCOH: computed via calculate_discounted_lcoh() using the same
+# CRF applied elsewhere in this model — see printed output for the exact
+# base-case value. Still excludes stack replacement, degradation,
+# compression and storage, so remains a lower-bound estimate.
 #
 # NPV @ 6 €/kg H2: -479,165 €
 #
