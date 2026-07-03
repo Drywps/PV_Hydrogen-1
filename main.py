@@ -714,7 +714,7 @@ print("Hydrogen-from-curtailment is technically feasible but economically margin
 # PEM Utilization: 8.99%  (1,127 operating hours/year)
 #   This is the critical economic driver — extremely low asset utilization.
 #
-# Simple LCOH: 6.38 €/kg H2 (undiscounted lower bound)
+# Simple LCOH: 6.38 €/kg H2 (undiscounted optimistic lower-bound estimate)
 # Discounted LCOH: computed via calculate_discounted_lcoh() using the same
 # CRF applied elsewhere in this model — see printed output for the exact
 # base-case value. Still excludes stack replacement, degradation,
