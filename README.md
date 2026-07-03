@@ -45,13 +45,10 @@ Download the hourly time series using the parameters above, then place the resul
 - Hydrogen energy retention: 54%
 
 
-The discounted LCOH is now a direct model output (`calculate_discounted_lcoh()`),
-using the same Capital Recovery Factor already applied elsewhere in the model
-for NPV reporting — not a separate discounting method bolted on for LCOH alone.
-Earlier versions of this project only estimated the discounted figure by hand
-(8.5–9.5 €/kg); the implemented calculation puts it slightly higher, at 9.70
-€/kg, which is a useful reminder that back-of-envelope corrections are a
-starting point, not a substitute for running the actual number.
+The discounted LCOH uses the same Capital Recovery Factor already applied
+elsewhere in the model for NPV reporting, keeping the discounting treatment
+consistent across the whole model rather than introducing a second method
+just for LCOH.
 
 **Bottom line: hydrogen-from-curtailment is technically feasible but
 economically marginal under moderate curtailment**, and notably more marginal
