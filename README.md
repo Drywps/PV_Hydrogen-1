@@ -35,9 +35,9 @@ Download the hourly time series using the parameters above, then place the resul
 
 - Annual PV generation: 16,085.69 MWh
 - Annual H₂ production, selected case: 15.1 tonnes/year (17.9 t/year ceiling reached at PEM ≥ 2 MW)
-- PEM utilization: 8.99% (1,127 operating hours/year)
-- Simple LCOH: 6.38 €/kg H₂ (undiscounted)
-- Discounted LCOH: 9.70 €/kg H₂
+- PEM utilization: 8.99% , (1,127 operating hours/year)
+- Simple LCOH: 6.38 €/kg H₂ , (undiscounted)
+- Discounted LCOH: 9.70 €/kg H₂ , (8%, 15 yr)
 - NPV at 6 €/kg H₂: -€479,165
 - Break-even H₂ price: approximately €9.5/kg
 - Hydrogen production saturates above approximately 2 MW PEM
