@@ -1,167 +1,377 @@
-# Curtailment-to-Hydrogen Techno-Economic Model for Cyprus
+# PV Curtailment-to-Hydrogen Techno-Economic Model
 
-PV curtailment in Cyprus escalated sharply from 3.3% in 2022 to 13.4% in 2023, 29% in 2024, and a record 47% in 2025 (Livera et al., 2026), indicating that flexibility solutions such as batteries, demand response, and hydrogen storage will become increasingly important.
+## Version 1.2
 
-This project evaluates whether curtailed photovoltaic electricity from a 10 MWp PV plant in Cyprus can be converted into green hydrogen using PEM electrolysis. 
+Python-based techno-economic model for investigating the use of curtailed photovoltaic electricity for green hydrogen production using a PEM electrolyzer.
 
-## Model Scope
+The model represents a 10 MWp PV plant in Cyprus and evaluates how grid export constraints, PEM electrolyzer sizing, part-load operation and minimum-load requirements affect:
 
-The model uses hourly PVGIS production data and applies a grid export limit to estimate curtailed electricity. The curtailed energy is then routed to a PEM electrolyzer, and the resulting hydrogen production, utilization, LCOH and NPV are calculated.
+- curtailed PV energy
+- hydrogen production
+- PEM utilization
+- curtailment recovery
+- specific electricity consumption
+- energy and exergy efficiency
+- levelized cost of hydrogen
+- project NPV
 
-## How to run
-pip install -r requirements.txt
+Version 1.2 extends the original model from a simplified constant-efficiency representation to a load-dependent PEM operating model.
+
+---
+
+## 1. Research Question
+
+Can otherwise-curtailed PV electricity be economically converted into green hydrogen, and how should the PEM electrolyzer be sized relative to the magnitude and temporal distribution of curtailment?
+
+The model focuses specifically on hydrogen production from curtailed PV electricity rather than assuming continuous dedicated renewable electricity supply.
+
+This distinction is important because an electrolyzer supplied only by curtailment can experience low annual utilization and highly variable loading.
+
+---
+
+## 2. System Configuration
+
+Base PV system:
+
+- PV capacity: 10 MWp
+- Location: Cyprus
+- Annual PV generation: approximately 16.09 GWh
+- PV capacity factor: approximately 18.36%
+- Simulation resolution: hourly
+- Simulation period: 8760 hours
+
+Selected base case:
+
+- PEM electrolyzer: 1 MW
+- Grid export limit: 6 MW
+- Curtailed PV energy: approximately 930.9 MWh/year
+- Hydrogen production: approximately 14,619 kg/year
+- Water consumption: approximately 131.6 m3/year
+
+The grid export limit creates the curtailment available to the electrolyzer.
+
+---
+
+## 3. Curtailment Model
+
+For each hourly timestep, PV generation above the grid export limit is classified as curtailed power.
+
+Conceptually:
+
+PV generation -> Grid export up to grid limit -> Excess PV -> PEM electrolyzer
+
+The electrolyzer can only consume curtailed electricity subject to:
+
+1. its rated power capacity
+2. its minimum operating load
+
+This allows the model to distinguish between technically available curtailment and curtailment that can actually be accepted by the electrolyzer.
+
+---
+
+## 4. PEM Part-Load Model
+
+Version 1.2 replaces the original constant specific electricity consumption assumption with a load-dependent PEM model.
+
+Hydrogen production therefore depends on electrolyzer load fraction.
+
+The base model assumes:
+
+- PEM minimum operating load: 15% of rated capacity
+- load-dependent specific electricity consumption
+- zero hydrogen production below the minimum operating threshold
+
+For the selected 1 MW PEM / 6 MW grid-limit case:
+
+- load-weighted exergy efficiency: approximately 61%
+- energy-weighted gross specific electricity consumption: approximately 53.4 kWh/kg H2
+
+This is more realistic than assuming identical conversion performance at every operating point.
+
+---
+
+## 5. PEM Sizing Study
+
+PEM capacities investigated:
+
+0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0, 1.2, 1.5, 2.0, 2.5, 3.0, 4.0 and 5.0 MW.
+
+The sizing analysis demonstrates an important trade-off.
+
+A small electrolyzer:
+
+- achieves relatively high utilization
+- cannot absorb large curtailment peaks
+- rejects energy above its rated capacity
+
+A large electrolyzer:
+
+- can absorb larger curtailment peaks
+- operates at lower average load
+- increasingly loses low-power curtailment events below its minimum operating threshold
+
+Therefore, maximizing PEM capacity does not necessarily maximize useful curtailment recovery or hydrogen production.
+
+---
+
+## 6. Curtailment Recovery
+
+For the base 6 MW grid-export limit, calculated curtailment recovery includes approximately:
+
+| PEM Size | Curtailment Recovery |
+|---:|---:|
+| 0.1 MW | 11.8% |
+| 0.5 MW | 52.6% |
+| 1.0 MW | 83.9% |
+| 1.5 MW | 94.6% |
+| 2.0 MW | 96.4% |
+| 2.5 MW | 95.6% |
+| 3.0 MW | 92.3% |
+| 4.0 MW | 85.3% |
+| 5.0 MW | 76.1% |
+
+Curtailment recovery peaks around 2 MW in the investigated case and subsequently decreases.
+
+This non-monotonic behaviour is a central result of Version 1.2.
+
+---
+
+## 7. Rejected Curtailment Diagnostics
+
+Version 1.2 explicitly divides unrecovered curtailment into two mechanisms:
+
+### Rejected Above PEM Capacity
+
+Occurs when:
+
+curtailed power > PEM rated power
+
+This dominates when the electrolyzer is undersized.
+
+### Rejected Below Minimum Load
+
+Occurs when:
+
+curtailed power < minimum PEM operating power
+
+This becomes increasingly important as PEM capacity increases because the absolute minimum operating power rises with electrolyzer size.
+
+The diagnostic therefore explains why simply installing a larger PEM electrolyzer does not guarantee greater annual curtailment recovery.
+
+---
+
+## 8. Minimum-Load Sensitivity
+
+The model tests alternative minimum operating thresholds:
+
+- 5%
+- 10%
+- 15%
+- 20%
+
+The 15% threshold is used as the base-case modelling assumption.
+
+The sensitivity analysis quantifies how electrolyzer turndown capability affects curtailment recovery across the full PEM sizing range.
+
+This is particularly important for highly intermittent curtailment-driven operation.
+
+---
+
+## 9. Economic Model
+
+The techno-economic analysis includes:
+
+- PEM CAPEX
+- annual OPEX
+- project lifetime
+- discount rate
+- hydrogen selling price
+- simplified LCOH
+- annualized LCOH
+- NPV
+
+PEM CAPEX scenarios:
+
+- €700/kW
+- €1,000/kW
+- €1,300/kW
+- €1,970/kW
+
+For the selected 1 MW PEM case at €1,000/kW:
+
+- Simple LCOH: approximately €6.61/kg H2
+- Simplified annualized LCOH: approximately €10.04/kg H2
+
+The difference illustrates the economic penalty created by low electrolyzer utilization.
+
+---
+
+## 10. Grid Export Limit Sensitivity
+
+Grid export limits from 8 MW down to 2 MW are investigated.
+
+Reducing the grid export limit creates progressively more curtailed energy and therefore increases the number of hours during which the PEM electrolyzer can operate.
+
+For the selected 1 MW PEM system:
+
+| Grid Limit | Curtailed Energy | H2 Production |
+|---:|---:|---:|
+| 8 MW | 5.3 MWh | 98 kg/year |
+| 7 MW | 143.6 MWh | 2,559 kg/year |
+| 6 MW | 930.9 MWh | 14,619 kg/year |
+| 5 MW | 2,335.8 MWh | 25,620 kg/year |
+| 4 MW | 4,234.3 MWh | 34,485 kg/year |
+| 3 MW | 6,520.7 MWh | 41,303 kg/year |
+| 2 MW | 9,245.6 MWh | 49,384 kg/year |
+
+This demonstrates that curtailment severity is one of the dominant drivers of electrolyzer utilization and hydrogen economics.
+
+---
+
+## 11. Battery vs Hydrogen Conversion Efficiency
+
+A limited energy-conversion comparison is included using equal accepted electrical input.
+
+For the selected case:
+
+- common electrical input: approximately 780.8 MWh
+- battery recovered energy at 90% assumed round-trip efficiency: approximately 702.7 MWh
+- hydrogen stored energy: approximately 487.3 MWh LHV
+- hydrogen conversion energy retention: approximately 62.4%
+
+This is only an energy-conversion comparison.
+
+It is not a full techno-economic comparison between battery storage and hydrogen.
+
+Battery CAPEX, degradation, duration, cycling, dispatch value and grid-service revenues are intentionally excluded from Project 1 and are reserved for a separate storage comparison study.
+
+---
+
+## 12. Main Engineering Findings
+
+The model produces four important conclusions.
+
+### 1. Maximum electrolyzer size is not automatically optimal
+
+Increasing PEM capacity initially increases recovered curtailment, but excessive sizing increases rejection of low-power curtailment events below the minimum operating threshold.
+
+### 2. Hydrogen production and minimum LCOH are different objectives
+
+The PEM size that maximizes annual hydrogen production does not necessarily minimize hydrogen production cost.
+
+### 3. Utilization is critical
+
+A curtailment-only electrolyzer can receive very cheap or otherwise-unused electricity while still producing expensive hydrogen because the capital-intensive electrolyzer operates for relatively few equivalent full-load hours.
+
+### 4. PEM sizing is a multi-objective problem
+
+A technically meaningful design must balance:
+
+- hydrogen production
+- curtailment recovery
+- electrolyzer utilization
+- CAPEX
+- LCOH
+- minimum-load behaviour
+
+---
+
+## 13. Current Model Limitations
+
+The current model is intended as a first-order research and portfolio model rather than an investment-grade feasibility study.
+
+Current limitations include:
+
+- simplified literature-based PEM part-load curve
+- no stack degradation
+- no stack replacement
+- no hydrogen compression
+- no hydrogen storage system
+- no detailed Balance-of-Plant model
+- no fixed Balance-of-Plant cost scaling
+- no economies of scale
+- no dynamic start-up or shutdown model
+- no real Cyprus electricity-market dispatch
+- no Day-Ahead Market price optimization
+
+Consequently, the calculated LCOH and NPV results should be interpreted as scenario outputs rather than project-development forecasts.
+
+---
+
+## 14. Version 1.2 Improvements
+
+Compared with the initial model, Version 1.2 adds:
+
+- load-dependent PEM specific electricity consumption
+- explicit PEM minimum operating load
+- minimum-load sensitivity from 5% to 20%
+- expanded PEM sizing from 0.1 to 5 MW
+- curtailment recovery analysis
+- rejected-curtailment diagnostics
+- separation of below-minimum-load and above-capacity losses
+- load-weighted energy and exergy efficiency
+- improved PEM utilization calculations
+- annualized LCOH analysis
+- expanded grid-limit sensitivity
+- improved engineering interpretation of PEM oversizing
+
+---
+
+## 15. Planned Next Development
+
+The next model extension will investigate a hybrid electrolyzer operating strategy.
+
+Instead of operating exclusively during curtailment events, the electrolyzer may operate at a baseline load during non-curtailment periods and increase production when curtailed PV electricity becomes available.
+
+This will allow investigation of the trade-off between:
+
+- higher electrolyzer utilization
+- purchased electricity cost
+- curtailment recovery
+- hydrogen production
+- LCOH
+- NPV
+
+A subsequent extension will compare alternative electrolyzer technologies, including:
+
+- PEM
+- alkaline
+- AEM
+- SOEC
+
+The comparison will focus on operating range, minimum load, efficiency, dynamic response and suitability for renewable-energy integration.
+
+---
+
+## 16. Repository Structure
+
+```text
+PV_Hydrogen_Project/
+|
+|-- main.py
+|-- README.md
+|-- LICENSE
+|-- data/
+|-- figures/
+
+## 17. Requirements
+
+Main Python packages:
+
+pandas
+numpy
+matplotlib
+
+Run the model using:
+
 python main.py
 
-## PVGIS data
-latitude 35.141, longitude 33.415, 10,000 kWp, slope 28°, azimuth 0°, system losses 14%
-source: https://re.jrc.ec.europa.eu/pvg_tools/en/tools.html
-Download the hourly time series using the parameters above, then place the resulting CSV file in the same folder as main.py.
+---
 
-## Base Case
+## 18. Status
 
-- PV plant size: 10 MWp
-- Location: Cyprus
-- Grid export limit: 6 MW
-- PEM electrolyzer size: 1 MW
-- PEM CAPEX: 1,000 €/kW
-- Electrolyzer consumption: 52 kWh/kg H₂
-- Water consumption: 9 L/kg H₂
-- Project lifetime: 15 years
-- Discount rate: 8%
-- OPEX: 3% of PEM CAPEX/year
-- Hydrogen sale price: 6 €/kg
+Current release: v1.2
 
-## Key Results
+Project status: active development.
 
-- Annual PV generation: 16,085.69 MWh
-- Annual H₂ production, selected case: 15.1 tonnes/year (17.9 t/year ceiling reached at PEM ≥ 2 MW)
-- PEM utilization: 8.99% , (1,127 operating hours/year)
-- Simple LCOH: 6.38 €/kg H₂ , (undiscounted)
-- Discounted LCOH: 9.70 €/kg H₂ , (8%, 15 yr)
-- NPV at 6 €/kg H₂: -€479,165
-- Break-even H₂ price: approximately €9.5/kg
-- Hydrogen production saturates above approximately 2 MW PEM
-- Battery energy retention: 90%
-- Hydrogen energy retention: 54%
-
-
-The discounted LCOH uses the same Capital Recovery Factor already applied
-elsewhere in the model for NPV reporting, keeping the discounting treatment
-consistent across the whole model rather than introducing a second method
-just for LCOH.
-
-**Bottom line: hydrogen-from-curtailment is technically feasible but
-economically marginal under moderate curtailment**, and notably more marginal
-once discounting is applied properly.
-
-## Figures
-
-**Hydrogen production saturates above ~2 MW PEM.** Beyond this point, the
-electrolyser is oversized relative to available curtailed power, and
-utilization drops sharply for no further production gain.
-
-![PEM size vs hydrogen production](figures/figure03_pem_vs_h2.png)
-
-**LCOH falls fast as the grid export limit tightens** (more curtailed
-electricity available to the electrolyser), but the gap between simple and
-discounted LCOH widens at every point — discounting is not a minor correction,
-it changes the economic picture materially across the whole sensitivity range.
-
-![LCOH vs grid export limit, simple and discounted](figures/figure07_lcoh_vs_grid_limit.png)
-
-**NPV is negative across most of the low-curtailment / low-H2-price region**,
-and only turns positive with tighter grid limits and higher hydrogen prices —
-both of which push the system further from a "using otherwise-wasted
-electricity" framing and closer to a dedicated-production framing.
-
-![NPV heatmap across grid limit and hydrogen price](figures/figure10_npv_heatmap.png)
-
-**Utilization collapses as PEM size increases past the curtailment ceiling**,
-which is the core economic driver of this model — a large asset sitting idle
-most of the year, not the price of the input electricity.
-
-![PEM size vs utilization](figures/figure04_pem_vs_utilization.png)
-
-Additional figures (monthly production seasonality, CAPEX intensity, NPV vs
-hydrogen price, NPV vs grid limit, raw hourly/two-day PV output) are in
-`figures/`.
-
-
-## Main Conclusion
-
-Hydrogen-from-curtailment is technically feasible but economically marginal under the base-case assumptions. The main weakness is not the availability of solar energy, but the low utilization of the electrolyzer when it operates only on curtailed electricity.
-
-
-
-## Model Limitations
-
-This is a first-order techno-economic model. It does not yet include:
-
-- PEM partial-load efficiency
-- Stack degradation
-- Stack replacement
-- Hydrogen compression
-- Hydrogen storage
-- Real Cyprus electricity market prices
-- Dynamic dispatch using MCP / DAM price signals
-#
-- Constant PEM exergy efficiency resulting from the assumption of fixed specific energy consumption (52 kWh/kg H₂) across all operating conditions.
-- Load-dependent exergy efficiency is not modelled; realistic exergy analysis requires literature-based PEM partial-load performance curves.
-#
-
-This study evaluates a representative 10 MWp PV plant rather than the entire Cyprus power system.
-
-## Model Limitations : Note on PEM vs AEM
-
-This model uses PEM electrolysis as the baseline technology because its
-performance and cost assumptions are well established in the literature.
-A future extension will compare PEM and AEM electrolysis under identical
-technical and economic assumptions.
-
-## Future Work
-
-The next model upgrades include:
-
-1. Literature-based PEM partial-load efficiency curves
-2. PEM stack degradation and replacement
-3. Hydrogen compression and storage
-4. Integration of real Cyprus electricity market prices (MCP/DAM)
-5. PEM versus AEM electrolysis comparison
-6. Comparison against TSOC-recommended storage capacities:
-   - 80 MW / 240 MWh
-   - 200 MW / 400 MWh
-7. Multi-objective system optimization
-
-### Future Work: Optimization
-
-The current model evaluates predefined design scenarios rather than performing automatic optimization.
-
-Preliminary analyses indicate that minimizing a single objective, such as LCOH, can produce degenerate solutions that favour undersized electrolyzers with high utilization but low annual hydrogen production.
-
-Future versions will implement multi-objective optimization considering:
-
-- Levelized Cost of Hydrogen (LCOH)
-- Net Present Value (NPV)
-- Annual hydrogen production
-- Electrolyzer utilization
-- Renewable energy utilization
-
-This will enable identification of Pareto-optimal system configurations, highlighting the trade-offs between cost, profitability and hydrogen output, rather than relying on a single optimization objective.
-
-## References
-
-- IEA (2024), *Global Hydrogen Review 2024*, IEA, Paris.
-  https://www.iea.org/reports/global-hydrogen-review-2024
-  — used for the dedicated PV-to-H2 LCOH benchmark range (3.5–6.0 €/kg, Southern Europe / MENA) referenced in the benchmark comparison.
-
-- IRENA, *Green Hydrogen Cost Reduction* and related electrolyser cost analyses. 
-  https://www.irena.org
-  — used for electrolyser CAPEX scenario ranges (700–1,300 €/kW).
-
-- PVGIS (Joint Research Centre), hourly PV generation time series for 35.141°N, 33.415°E (Cyprus), crystalline silicon, 10 MWp, 28° tilt.
-  https://re.jrc.ec.europa.eu/pvg_tools/en/
-
-- Livera, A.; Herodotou, P.; Marangis, D.; Makrides, G.; Georghiou, G.E. (2026),
-  "Case Study of a Photovoltaic (PV)-Powered, Battery-Integrated System in
-  Cyprus," Energies, 19(10), 2402. https://doi.org/10.3390/en19102402
-— source of the Cyprus RES curtailment trajectory (3.3% in 2022 to 47% in 2025) cited above.
+Next milestone: Hybrid Operating Strategy Sensitivity.
