@@ -104,31 +104,49 @@ This is a first-order techno-economic model. It does not yet include:
 - Hydrogen storage
 - Real Cyprus electricity market prices
 - Dynamic dispatch using MCP / DAM price signals
+#
+- Constant PEM exergy efficiency resulting from the assumption of fixed specific energy consumption (52 kWh/kg H₂) across all operating conditions.
+- Load-dependent exergy efficiency is not modelled; realistic exergy analysis requires literature-based PEM partial-load performance curves.
+#
 
 This study evaluates a representative 10 MWp PV plant rather than the entire Cyprus power system.
 
-## Note on PEM vs AEM
+## Model Limitations : Note on PEM vs AEM
 
-This model uses **PEM electrolysis** as the baseline technology, chosen
-because its cost and performance parameters are well documented in the
-literature cited above. It does not currently model **AEM electrolysis**,
-which is a closer match to some of the technologies used in system-level
-green hydrogen research groups. A PEM-to-AEM cost and efficiency comparison is
-a natural extension of this model — see Future Work.
+This model uses PEM electrolysis as the baseline technology because its
+performance and cost assumptions are well established in the literature.
+A future extension will compare PEM and AEM electrolysis under identical
+technical and economic assumptions.
 
 ## Future Work
 
-The next model upgrades are:
+The next model upgrades include:
 
-1. PEM vs AEM electrolysis comparison
-2. Add PEM stack replacement
-3. Add hydrogen compression and storage
-4. Add real Cyprus electricity market price signals
-5. Add PEM partial-load efficiency using literature-based curves
-6. Compare PEM electrolysis against the storage capacities recommended by TSOC:
-- 80 MW / 240 MWh
-- 200 MW / 400 MWh
+1. Literature-based PEM partial-load efficiency curves
+2. PEM stack degradation and replacement
+3. Hydrogen compression and storage
+4. Integration of real Cyprus electricity market prices (MCP/DAM)
+5. PEM versus AEM electrolysis comparison
+6. Comparison against TSOC-recommended storage capacities:
+   - 80 MW / 240 MWh
+   - 200 MW / 400 MWh
+7. Multi-objective system optimization
 
+### Future Work: Optimization
+
+The current model evaluates predefined design scenarios rather than performing automatic optimization.
+
+Preliminary analyses indicate that minimizing a single objective, such as LCOH, can produce degenerate solutions that favour undersized electrolyzers with high utilization but low annual hydrogen production.
+
+Future versions will implement multi-objective optimization considering:
+
+- Levelized Cost of Hydrogen (LCOH)
+- Net Present Value (NPV)
+- Annual hydrogen production
+- Electrolyzer utilization
+- Renewable energy utilization
+
+This will enable identification of Pareto-optimal system configurations, highlighting the trade-offs between cost, profitability and hydrogen output, rather than relying on a single optimization objective.
 
 ## References
 
