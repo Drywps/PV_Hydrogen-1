@@ -18,9 +18,10 @@
 # Description
 # =========================================
 
-#This project evaluates the feasibility of converting
-#curtailed photovoltaic electricity into green hydrogen
-#using PEM electrolysis.
+#This project evaluates PV-to-hydrogen operation under two dispatch strategies:
+#(1) non-hybrid PV minimum-load operation with curtailment-responsive ramping, and
+#(2) hybrid PV-priority operation with grid top-up only to the selected baseline.
+#Both strategies use PEM electrolysis and preserve an explicit hourly power balance.
 
 #The model combines:
 #- PVGIS hourly production data
@@ -30,6 +31,18 @@
 #- LCOH calculations
 #- NPV analysis
 #- Sensitivity studies
+
+# Version history:
+#   v1.2 - PEM sizing + minimum-load sensitivity (curtailment-only operation)
+#   v1.3 - Two dispatch strategies:
+#          NON-HYBRID: PV sustains minimum PEM load where possible, then the PEM
+#          ramps upward to absorb PV that would otherwise be curtailed.
+#          HYBRID: PV has first priority up to PEM rated power; grid electricity
+#          supplies only the deficit required to reach the selected baseline.
+#          Electricity-price sensitivity is applied only to purchased grid energy.
+#          Otherwise-exportable PV diverted to PEM carries a month-specific 2023
+#          opportunity cost; curtailed PV carries zero opportunity cost.
+#   v1.4 (planned) - electrolyzer technology sensitivity
 
 
 # =========================================
@@ -55,8 +68,42 @@ filename = os.path.join(BASE_DIR, "Timeseries_35.141_33.415_SA3_10000kWp_crystSi
 #
 #kwh_per_kg_h2 = 52
 water_liters_per_kg_h2 = 9
-#electricity_price_sell = 0.08
-hydrogen_sale_price = 6
+# Historical 2023 EAC RES purchase-price proxy used to value electricity
+# that could have been exported but is instead diverted to the electrolyser.
+#
+# Connection level selected for this generic project: 11 kV (Medium Voltage).
+# Source units were euro-cent/kWh and are converted here to EUR/MWh:
+#   1 euro-cent/kWh = 10 EUR/MWh.
+#
+# IMPORTANT:
+# - This is NOT a Cyprus DAM price.
+# - It is used only as a historical monthly opportunity-cost proxy for
+#   otherwise-exportable PV energy.
+# - Curtailed PV has zero export opportunity cost.
+PV_EXPORT_PRICE_2023_EUR_PER_MWH = {
+    1: 235.65,   # January
+    2: 220.20,   # February
+    3: 225.16,   # March
+    4: 210.33,   # April
+    5: 215.27,   # May
+    6: 202.39,   # June
+    7: 107.20,   # July
+    8: 106.82,   # August
+    9: 106.82,   # September
+    10: 106.82,  # October
+    11: 106.82,  # November
+    12: 106.82,  # December
+}
+
+# Legacy compatibility scalar only. Current calculations use the
+# monthly series above.
+pv_export_price_eur_per_mwh = float(
+    sum(PV_EXPORT_PRICE_2023_EUR_PER_MWH.values())
+    / len(PV_EXPORT_PRICE_2023_EUR_PER_MWH)
+)
+
+reference_european_green_h2_price_eur_per_kg = 7.0
+hydrogen_sale_price = reference_european_green_h2_price_eur_per_kg
 project_lifetime_years = 15
 grid_limits_mw = [8, 7.5, 7, 6.5, 6, 5.5, 5, 4.5, 4, 3.5, 3, 2.5, 2]
 ###
@@ -80,12 +127,67 @@ pem_sizes_mw = [
     2.0, 2.5, 3.0, 4.0, 5.0
 ]
 
-hydrogen_price_scenarios = [4, 6, 8, 10, 12, 13, 14, 15, 16]
+hydrogen_price_scenarios = [2, 3, 4, 6, 8, 10]
 battery_round_trip_efficiency = 0.90
 h2_lower_heating_value_kwh_per_kg = 33.33
 discount_rate = 0.08
 ###
 
+# =========================================
+# v1.3 CONFIGURATION: HYBRID OPERATING STRATEGY SENSITIVITY
+# =========================================
+#
+# Roadmap: v1.2 (PEM sizing + minimum load) -> v1.3 (operating strategy) -> v1.4 (electrolyzer technology)
+#
+# v1.3 tests a HYBRID PV-priority strategy. Available PV is offered to the
+# PEM first. Grid electricity only fills a deficit required to reach the
+# requested baseline and never displaces available PV. A 0% baseline is
+# therefore PV-only hybrid operation, not the non-hybrid reference case.
+
+# Baseline load as a fraction of PEM rated capacity.
+baseline_load_fractions = [0.0, 0.20, 0.30, 0.40,
+    0.50, 0.60, 0.80, 1.00]
+
+# Price paid for grid electricity purchased to sustain the baseline load, €/MWh.
+# Curtailed PV energy remains free in all scenarios; only the purchased
+# top-up electricity is costed at these prices.
+electricity_price_scenarios_eur_per_mwh = [    0, 25, 50, 75, 100, 150, 200, 250, 270, 300]
+###
+# =========================================
+# CYPRUS 2023 INDUSTRIAL ELECTRICITY BENCHMARK
+# =========================================
+
+# Generic large industrial PEM consumer assumed at MV/HV level.
+#
+# CERA reports separate commercial/industrial tariffs for:
+#   Tariff 40 = Medium Voltage
+#   Tariff 50 = High Voltage
+#
+# For this generic techno-economic study, a representative midpoint
+# between MV and HV industrial electricity prices is used instead of
+# modelling a specific supplier or bilateral electricity contract.
+#
+# This is NOT a Cyprus DAM price.
+# The competitive Cyprus Day-Ahead Market was not operational in 2023.
+#
+# Representative 2023 benchmark:
+cyprus_2023_industrial_price_eur_per_mwh = 270.0
+
+# Representative day used for dispatch visualization.
+# Change this string to inspect another day.
+# Use "AUTO" to select the day with the highest gross no-PEM curtailment.
+# Replace with e.g. "2023-05-15" to force a specific day.
+dispatch_plot_date = "AUTO"
+dispatch_plot_hybrid_baseline_fraction = 0.20
+
+# Specific hybrid design point used for final reporting.
+# Sensitivity plots still evaluate all baseline and electricity-price scenarios.
+hybrid_design_baseline_fraction = 0.20
+hybrid_design_electricity_price_eur_per_mwh = cyprus_2023_industrial_price_eur_per_mwh
+
+# Selected design points for reporting / plots
+selected_pem_mw = 1.5
+full_curtailment_benchmark_range_mw = (2.0, 2.5)
 
 # =========================================
 # DATA LOADING FUNCTIONS
@@ -98,6 +200,59 @@ def load_pvgis_data(filename):
     df["time"] = pd.to_datetime(df["time"], format="%Y%m%d:%H%M")
     df["month"] = df["time"].dt.month
     return df
+
+
+def calculate_2023_pv_opportunity_cost(df, lost_export_w):
+    """
+    Calculate annual PV-export opportunity cost using the actual month
+    of each hourly PVGIS timestep and the 2023 EAC 11-kV RES purchase-price
+    proxy.
+
+    Opportunity cost is applied ONLY to otherwise-exportable PV displaced
+    by PEM consumption. Curtailed PV therefore carries zero opportunity cost.
+    """
+    lost_export_w = np.asarray(lost_export_w, dtype=float)
+
+    assert len(lost_export_w) == len(df), \
+        "Lost-export series length does not match PVGIS dataframe."
+    assert np.all(lost_export_w >= -1e-9), \
+        "Negative lost-export power detected."
+
+    month_array = df["month"].to_numpy(dtype=int)
+    price_eur_per_mwh = pd.Series(month_array).map(
+        PV_EXPORT_PRICE_2023_EUR_PER_MWH
+    ).to_numpy(dtype=float)
+
+    assert not np.isnan(price_eur_per_mwh).any(), \
+        "Missing 2023 monthly PV export opportunity-cost price."
+
+    # PVGIS input is hourly. W x 1 h / 1e6 = MWh.
+    hourly_lost_export_mwh = lost_export_w / 1_000_000.0
+    hourly_cost_eur = hourly_lost_export_mwh * price_eur_per_mwh
+
+    detail = pd.DataFrame({
+        "Month": month_array,
+        "Lost Export Energy (MWh)": hourly_lost_export_mwh,
+        "Opportunity Cost (€)": hourly_cost_eur,
+    })
+
+    monthly = (
+        detail.groupby("Month", as_index=False)
+        .agg({
+            "Lost Export Energy (MWh)": "sum",
+            "Opportunity Cost (€)": "sum",
+        })
+    )
+    monthly["PV Export Price Proxy (€/MWh)"] = monthly["Month"].map(
+        PV_EXPORT_PRICE_2023_EUR_PER_MWH
+    )
+
+    total_cost_eur = float(hourly_cost_eur.sum())
+
+    assert total_cost_eur >= -1e-6, \
+        "Annual PV opportunity cost must not be negative."
+
+    return total_cost_eur, monthly
 
 
 # =========================================
@@ -124,162 +279,56 @@ def calculate_hourly_curtailment(df, grid_limit_mw):
 
 
 def calculate_curtailment_recovery_vs_pem_size(df, pem_sizes_mw, selected_curtailed_mwh):
-    """
-    For each candidate PEM size, compute what fraction of the SELECTED
-    base-case curtailed energy (df["curtailed_power_w"], already fixed by
-    the chosen grid export limit) the PEM can actually absorb, applying
-    the same 15% minimum-load cutoff used elsewhere in the model.
-
-    NOTE: this uses the curtailment profile for the base-case grid limit
-    only. It answers "how well does PEM size X recover the curtailment we
-    already have", not "how curtailment changes with grid limit".
-    """
-    curtailment_recovery_results = []
-
+    """Fraction of gross no-PEM curtailment avoided/absorbed by the non-hybrid PEM strategy."""
+    gross_curt_w = np.maximum(df["P"].to_numpy(dtype=float) - selected_grid_limit_mw * 1e6, 0.0)
+    gross_curt_mwh = gross_curt_w.sum() / 1e6
+    results = []
     for pem_size_mw in pem_sizes_mw:
-
-        pem_capacity_kw = pem_size_mw * 1000
-        pem_energy_used_kwh = 0.0
-
-        for curtailed_power_w in df["curtailed_power_w"]:
-
-            curtailed_power_kw = curtailed_power_w / 1000
-            pem_power_kw = min(curtailed_power_kw, pem_capacity_kw)
-            load_fraction = pem_power_kw / pem_capacity_kw if pem_capacity_kw > 0 else 0.0
-
-            if load_fraction < MIN_PEM_LOAD_FRACTION:
-                pem_power_used_kw = 0.0
-            else:
-                pem_power_used_kw = pem_power_kw
-
-            # Hourly timestep = 1 hour, so kW == kWh contribution per row
-            pem_energy_used_kwh += pem_power_used_kw
-
-        pem_energy_used_mwh = pem_energy_used_kwh / 1000
-
-        recovery_percent = (
-            pem_energy_used_mwh
-            / selected_curtailed_mwh
-            * 100
-        )
-
-        curtailment_recovery_results.append(recovery_percent)
-
-    return curtailment_recovery_results
+        op = simulate_nonhybrid_operation(df, pem_size_mw, selected_grid_limit_mw)
+        residual_mwh = op["residual_curtailment_w"].sum() / 1e6
+        recovered_mwh = max(gross_curt_mwh - residual_mwh, 0.0)
+        results.append(recovered_mwh / gross_curt_mwh * 100 if gross_curt_mwh > 0 else 0.0)
+    return results
 
 
 def diagnose_pem_curtailment(df, pem_sizes_mw):
-    """
-    For each candidate PEM size, split the SELECTED base-case curtailed
-    energy (df["curtailed_power_w"], same source as everywhere else in
-    the model) into:
-      - Accepted: energy the PEM actually converts
-      - Rejected Below Min Load: curtailed power present but below the
-        MIN_PEM_LOAD_FRACTION cutoff, so the PEM stays off
-      - Rejected Above PEM Capacity: curtailed power exceeding the PEM's
-        rated capacity, so the excess cannot be absorbed
-
-    Uses the same MIN_PEM_LOAD_FRACTION as calculate_hydrogen_from_pem_input
-    and calculate_curtailment_recovery_vs_pem_size, so all three stay
-    numerically consistent with each other.
-    """
-
+    """Split gross no-PEM curtailment into avoided and residual curtailment."""
     results = []
-
-    curtailed_w = df["curtailed_power_w"].values
+    gross_no_pem_w = np.maximum(
+        df["P"].to_numpy(dtype=float) - selected_grid_limit_mw * 1e6, 0.0
+    )
+    gross_no_pem_mwh = gross_no_pem_w.sum() / 1e6
 
     for pem_mw in pem_sizes_mw:
-
-        pem_capacity_w = pem_mw * 1_000_000
-        min_power_w = MIN_PEM_LOAD_FRACTION * pem_capacity_w
-
-        accepted_w = np.where(
-            curtailed_w >= min_power_w,
-            np.minimum(curtailed_w, pem_capacity_w),
-            0.0
-        )
-
-        below_min_w = np.where(
-            (curtailed_w > 0) & (curtailed_w < min_power_w),
-            curtailed_w,
-            0.0
-        )
-
-        above_capacity_w = np.where(
-            curtailed_w > pem_capacity_w,
-            curtailed_w - pem_capacity_w,
-            0.0
-        )
-
+        op = simulate_nonhybrid_operation(df, pem_mw, selected_grid_limit_mw)
+        residual_mwh = op["residual_curtailment_w"].sum() / 1e6
+        avoided_mwh = max(gross_no_pem_mwh - residual_mwh, 0.0)
         results.append({
             "PEM Size (MW)": pem_mw,
-            "Accepted (MWh)": accepted_w.sum() / 1_000_000,
-            "Rejected Below Min Load (MWh)": below_min_w.sum() / 1_000_000,
-            "Rejected Above PEM Capacity (MWh)": above_capacity_w.sum() / 1_000_000
+            "Gross Curtailment without PEM (MWh)": gross_no_pem_mwh,
+            "Avoided Curtailment (MWh)": avoided_mwh,
+            "Residual Curtailment (MWh)": residual_mwh,
         })
 
     return pd.DataFrame(results)
 
-
 def minimum_load_sensitivity(df, pem_sizes_mw, min_load_fractions):
-    """
-    Evaluate how the electrolyzer minimum-load constraint affects
-    recovery of curtailed PV energy, for the SAME base-case curtailment
-    profile (df["curtailed_power_w"]) used everywhere else in the model.
-
-    Returns a dictionary:
-        results[min_load_fraction] = [recovery % for each PEM size]
-
-    min_load_fractions has no default value here on purpose: the natural
-    default (MIN_LOAD_SENSITIVITY) is defined later in this file, and a
-    default argument using a name that doesn't exist yet at function
-    definition time raises NameError immediately, before the function is
-    ever called. Pass MIN_LOAD_SENSITIVITY explicitly from Main Execution.
-    """
-
-    curtailed_power_w = df["curtailed_power_w"].to_numpy()
-
-    total_curtailed_energy_mwh = (
-        curtailed_power_w.sum() / 1e6
-    )
-
+    """Curtailment recovery sensitivity using the non-hybrid dispatch for each minimum load."""
+    gross_no_pem_w = np.maximum(df["P"].to_numpy(dtype=float) - selected_grid_limit_mw * 1e6, 0.0)
+    gross_no_pem_mwh = gross_no_pem_w.sum() / 1e6
     results = {}
-
     for min_load_fraction in min_load_fractions:
-
         recovery_values = []
-
         for pem_size_mw in pem_sizes_mw:
-
-            pem_capacity_w = pem_size_mw * 1e6
-            minimum_power_w = min_load_fraction * pem_capacity_w
-
-            accepted_energy_wh = 0.0
-
-            for curtailed_w in curtailed_power_w:
-
-                if curtailed_w < minimum_power_w:
-                    accepted_w = 0.0
-                else:
-                    accepted_w = min(curtailed_w, pem_capacity_w)
-
-                accepted_energy_wh += accepted_w
-
-            accepted_energy_mwh = accepted_energy_wh / 1e6
-
-            if total_curtailed_energy_mwh > 0:
-                recovery_percent = (
-                    accepted_energy_mwh
-                    / total_curtailed_energy_mwh
-                    * 100
-                )
-            else:
-                recovery_percent = 0.0
-
-            recovery_values.append(recovery_percent)
-
+            op = simulate_nonhybrid_operation(
+                df, pem_size_mw, selected_grid_limit_mw, min_load_fraction=min_load_fraction
+            )
+            residual_mwh = op["residual_curtailment_w"].sum() / 1e6
+            recovered_mwh = max(gross_no_pem_mwh - residual_mwh, 0.0)
+            recovery_values.append(
+                recovered_mwh / gross_no_pem_mwh * 100 if gross_no_pem_mwh > 0 else 0.0
+            )
         results[min_load_fraction] = recovery_values
-
     return results
 
 
@@ -306,42 +355,124 @@ def calculate_monthly_hydrogen(df, selected_pem_mw):
     return monthly_h2_kg
 
 #
+def simulate_nonhybrid_operation(df, pem_size_mw, grid_limit_mw, min_load_fraction=None):
+    """
+    Non-hybrid PV-only PEM dispatch.
+
+    Strategy:
+      1. If PV can sustain the PEM physical minimum load, PV supplies that minimum.
+      2. Remaining PV is offered to the grid up to the export limit.
+      3. PV that would otherwise be curtailed is diverted to the PEM, causing the
+         PEM to ramp above minimum load, up to rated capacity.
+      4. No grid electricity is purchased.
+
+    This is deliberately different from a pure curtailment-only electrolyzer.
+    """
+    if min_load_fraction is None:
+        min_load_fraction = MIN_PEM_LOAD_FRACTION
+
+    pv_w = df["P"].to_numpy(dtype=float)
+    pem_capacity_w = pem_size_mw * 1_000_000
+    grid_limit_w = grid_limit_mw * 1_000_000
+    min_power_w = min_load_fraction * pem_capacity_w
+
+    # PV supports minimum PEM load only when the physical minimum can be met.
+    baseline_pv_to_pem_w = np.where(
+        pv_w >= min_power_w,
+        np.minimum(min_power_w, pem_capacity_w),
+        0.0
+    )
+
+    remaining_after_baseline_w = np.maximum(pv_w - baseline_pv_to_pem_w, 0.0)
+
+    # This is the PV that would be curtailed after minimum-load PEM consumption.
+    potential_curtailment_w = np.maximum(
+        remaining_after_baseline_w - grid_limit_w,
+        0.0
+    )
+
+    curtailment_boost_w = np.minimum(
+        potential_curtailment_w,
+        np.maximum(pem_capacity_w - baseline_pv_to_pem_w, 0.0)
+    )
+
+    pv_to_pem_w = baseline_pv_to_pem_w + curtailment_boost_w
+    pem_power_w = pv_to_pem_w.copy()
+
+    pv_remaining_w = np.maximum(pv_w - pv_to_pem_w, 0.0)
+    pv_export_w = np.minimum(pv_remaining_w, grid_limit_w)
+    residual_curtailment_w = np.maximum(pv_remaining_w - grid_limit_w, 0.0)
+
+    active = pem_power_w >= min_power_w - 1e-9
+    pem_power_w = np.where(active, pem_power_w, 0.0)
+    pv_to_pem_w = np.where(active, pv_to_pem_w, 0.0)
+
+    # Recompute remaining flows after physical minimum-load enforcement.
+    pv_remaining_w = np.maximum(pv_w - pv_to_pem_w, 0.0)
+    pv_export_w = np.minimum(pv_remaining_w, grid_limit_w)
+    residual_curtailment_w = np.maximum(pv_remaining_w - grid_limit_w, 0.0)
+
+    # Counterfactual export without the electrolyser. This is the correct
+    # reference for the opportunity cost of diverting otherwise-saleable PV.
+    export_without_pem_w = np.minimum(pv_w, grid_limit_w)
+    lost_export_w = np.maximum(export_without_pem_w - pv_export_w, 0.0)
+
+    assert np.all(pv_export_w <= export_without_pem_w + 1e-9), \
+        "Actual PV export exceeds no-PEM counterfactual export."
+
+    hourly_h2_kg, annual_h2_kg = calculate_hydrogen_from_pem_input(
+        pem_power_w, pem_capacity_w
+    )
+
+    # Physical checks.
+    assert np.all(pv_to_pem_w >= -1e-9)
+    assert np.all(pv_export_w >= -1e-9)
+    assert np.all(residual_curtailment_w >= -1e-9)
+    assert np.all(pem_power_w <= pem_capacity_w + 1e-9)
+    assert np.allclose(
+        pv_w,
+        pv_to_pem_w + pv_export_w + residual_curtailment_w,
+        atol=1e-6
+    ), "Non-hybrid PV energy balance failed."
+
+    total_pem_energy_mwh = pem_power_w.sum() / 1_000_000
+    utilization_pct = (
+        total_pem_energy_mwh / (pem_size_mw * 8760) * 100
+        if pem_size_mw > 0 else 0.0
+    )
+
+    return {
+        "pv_to_pem_w": pv_to_pem_w,
+        "baseline_pv_to_pem_w": baseline_pv_to_pem_w,
+        "curtailment_boost_w": curtailment_boost_w,
+        "pem_power_w": pem_power_w,
+        "pv_export_w": pv_export_w,
+        "potential_curtailment_w": potential_curtailment_w,
+        "residual_curtailment_w": residual_curtailment_w,
+        "export_without_pem_w": export_without_pem_w,
+        "lost_export_w": lost_export_w,
+        "lost_export_mwh": lost_export_w.sum() / 1_000_000,
+        "hourly_h2_kg": hourly_h2_kg,
+        "annual_h2_kg": annual_h2_kg,
+        "total_pem_energy_mwh": total_pem_energy_mwh,
+        "utilization_pct": utilization_pct,
+        "operating_hours": int(active.sum()),
+        "full_load_hours": pem_power_w.sum() / pem_capacity_w,
+    }
+
+
 def analyze_pem_size(df, pem_size_mw, pem_capex_per_kw):
+    """Evaluate PEM sizing under the non-hybrid PV minimum-load + curtailment-ramp strategy."""
+    op = simulate_nonhybrid_operation(df, pem_size_mw, selected_grid_limit_mw)
 
-    pem_size_w = pem_size_mw * 1_000_000
-    pem_size_kw = pem_size_mw * 1_000
-
+    pem_size_kw = pem_size_mw * 1000
     pem_capex_eur = pem_size_kw * pem_capex_per_kw
-
-    pem_input_w = df["curtailed_power_w"].clip(
-        upper=pem_size_w
-    )
-
-    load_fraction = pem_input_w / pem_size_w
-
-    active = load_fraction >= MIN_PEM_LOAD_FRACTION
-
-    pem_power_used_w = np.where(
-    active,
-    pem_input_w,
-    0.0
-    )
-
-    pem_energy_mwh = pem_power_used_w.sum() / 1_000_000
-    _, h2_kg = calculate_hydrogen_from_pem_input(
-        pem_input_w.values,
-        pem_size_w
-    )
-
-    utilization = (
-        pem_energy_mwh /
-        (pem_size_mw * 8760)
-    )
+    pem_energy_mwh = op["total_pem_energy_mwh"]
+    h2_kg = op["annual_h2_kg"]
+    utilization = op["utilization_pct"] / 100.0
 
     one_year_capex_intensity = (
-        pem_capex_eur / h2_kg
-        if h2_kg > 0
-        else np.inf
+        pem_capex_eur / h2_kg if h2_kg > 0 else np.inf
     )
 
     return (
@@ -351,21 +482,265 @@ def analyze_pem_size(df, pem_size_mw, pem_capex_per_kw):
         pem_capex_eur,
         one_year_capex_intensity
     )
-###
+
+
 def calculate_selected_pem_input(df, selected_pem_mw):
+    """Selected non-hybrid base case, using PV minimum-load operation plus curtailment ramping."""
+    op = simulate_nonhybrid_operation(df, selected_pem_mw, selected_grid_limit_mw)
+    return pd.Series(op["pem_power_w"], index=df.index), op["annual_h2_kg"]
 
-    selected_pem_w = selected_pem_mw * 1_000_000
 
-    pem_input_w = df["curtailed_power_w"].clip(
-        upper=selected_pem_w
+# =========================================
+# v1.3 HYBRID OPERATING STRATEGY FUNCTIONS
+# =========================================
+
+def simulate_hybrid_operation(df, pem_size_mw, baseline_load_fraction, grid_limit_mw=None):
+    """
+    Hybrid PV-priority PEM dispatch.
+
+    Dispatch priority:
+      1. All available PV is offered to the PEM first, up to PEM rated power.
+      2. Grid electricity supplies only the deficit needed to reach the selected
+         baseline operating level.
+      3. Grid electricity never displaces available PV and never pushes the PEM
+         above the selected baseline by itself.
+      4. PV remaining after PEM consumption is exported up to the grid limit;
+         any further PV is residual curtailment.
+
+    baseline_load_fraction = 0 means PV-only hybrid operation, not the old
+    curtailment-only v1.2 strategy.
+    """
+    if grid_limit_mw is None:
+        grid_limit_mw = selected_grid_limit_mw
+
+    pv_w = df["P"].to_numpy(dtype=float)
+    pem_capacity_w = pem_size_mw * 1_000_000
+    grid_limit_w = grid_limit_mw * 1_000_000
+    min_pem_power_w = MIN_PEM_LOAD_FRACTION * pem_capacity_w
+    baseline_power_w = baseline_load_fraction * pem_capacity_w
+
+    # PV has absolute priority to the PEM.
+    pv_to_pem_w = np.minimum(pv_w, pem_capacity_w)
+
+    # Grid can only fill a deficit to the requested baseline. A requested
+    # baseline below the physical PEM minimum does not trigger grid operation.
+    effective_grid_baseline_w = (
+        baseline_power_w if baseline_power_w >= min_pem_power_w else 0.0
+    )
+    grid_to_pem_w = np.maximum(effective_grid_baseline_w - pv_to_pem_w, 0.0)
+    grid_to_pem_w = np.minimum(
+        grid_to_pem_w,
+        np.maximum(pem_capacity_w - pv_to_pem_w, 0.0)
     )
 
-    _, selected_h2_kg = calculate_hydrogen_from_pem_input(
-        pem_input_w.values,
-        selected_pem_w
+    target_pem_power_w = pv_to_pem_w + grid_to_pem_w
+
+    # If neither PV nor grid support the physical minimum, PEM is off.
+    active = target_pem_power_w >= min_pem_power_w - 1e-9
+    actual_power_used_w = np.where(active, target_pem_power_w, 0.0)
+    pv_to_pem_w = np.where(active, pv_to_pem_w, 0.0)
+    grid_to_pem_w = np.where(active, grid_to_pem_w, 0.0)
+
+    pv_remaining_w = np.maximum(pv_w - pv_to_pem_w, 0.0)
+    pv_export_w = np.minimum(pv_remaining_w, grid_limit_w)
+    residual_curtailment_w = np.maximum(pv_remaining_w - grid_limit_w, 0.0)
+
+    # Counterfactual curtailment if no PEM consumed PV, useful for plotting
+    # and quantifying curtailment avoided by the electrolyzer.
+    gross_curtailment_without_pem_w = np.maximum(pv_w - grid_limit_w, 0.0)
+
+    # Counterfactual export without the electrolyser. Only PV that would
+    # otherwise have been exported carries an opportunity cost.
+    export_without_pem_w = np.minimum(pv_w, grid_limit_w)
+    lost_export_w = np.maximum(export_without_pem_w - pv_export_w, 0.0)
+
+    # Physical / dispatch assertions.
+    assert np.all(pv_to_pem_w >= -1e-9), "Negative PV-to-PEM flow detected."
+    assert np.all(grid_to_pem_w >= -1e-9), "Negative grid purchase detected."
+    assert np.all(actual_power_used_w <= pem_capacity_w + 1e-9), "PEM capacity exceeded."
+    assert np.all(pv_to_pem_w <= pv_w + 1e-9), "PEM uses more PV than generated."
+    assert np.all(pv_export_w <= export_without_pem_w + 1e-9), \
+        "Actual PV export exceeds no-PEM counterfactual export."
+    assert np.allclose(
+        actual_power_used_w,
+        pv_to_pem_w + grid_to_pem_w,
+        atol=1e-6
+    ), "Hybrid PEM source balance failed."
+    assert np.allclose(
+        pv_w,
+        pv_to_pem_w + pv_export_w + residual_curtailment_w,
+        atol=1e-6
+    ), "Hybrid PV energy balance failed."
+
+    hourly_h2_kg, annual_h2_kg = calculate_hydrogen_from_pem_input(
+        actual_power_used_w, pem_capacity_w
     )
 
-    return pem_input_w, selected_h2_kg
+    pv_energy_to_pem_mwh = pv_to_pem_w.sum() / 1_000_000
+    purchased_energy_mwh = grid_to_pem_w.sum() / 1_000_000
+    total_pem_energy_mwh = actual_power_used_w.sum() / 1_000_000
+    residual_curtailment_mwh = residual_curtailment_w.sum() / 1_000_000
+
+    utilization_pct = (
+        total_pem_energy_mwh / (pem_size_mw * 8760) * 100
+        if pem_size_mw > 0 else 0.0
+    )
+
+    share_pem_energy_from_pv_pct = (
+        pv_energy_to_pem_mwh / total_pem_energy_mwh * 100
+        if total_pem_energy_mwh > 0 else np.nan
+    )
+
+    return {
+        "annual_h2_kg": annual_h2_kg,
+        "hourly_h2_kg": hourly_h2_kg,
+        "operating_hours": int(active.sum()),
+        "full_load_hours": actual_power_used_w.sum() / pem_capacity_w,
+        "utilization_pct": utilization_pct,
+        "pv_energy_to_pem_mwh": pv_energy_to_pem_mwh,
+        "purchased_energy_mwh": purchased_energy_mwh,
+        "total_pem_energy_mwh": total_pem_energy_mwh,
+        "share_pem_energy_from_pv_pct": share_pem_energy_from_pv_pct,
+        "residual_curtailment_mwh": residual_curtailment_mwh,
+        "lost_export_mwh": lost_export_w.sum() / 1_000_000,
+        "export_without_pem_w": export_without_pem_w,
+        "lost_export_w": lost_export_w,
+        "pv_to_pem_w": pv_to_pem_w,
+        "purchased_w": grid_to_pem_w,
+        "pem_power_w": actual_power_used_w,
+        "pv_export_w": pv_export_w,
+        "residual_curtailment_w": residual_curtailment_w,
+        "gross_curtailment_without_pem_w": gross_curtailment_without_pem_w,
+    }
+
+
+def hybrid_strategy_sensitivity(
+    df,
+    selected_pem_mw,
+    baseline_load_fractions,
+    electricity_prices_eur_per_mwh,
+    pem_capex_eur,
+    fixed_annual_opex_eur,
+    discount_rate,
+    project_lifetime_years,
+    hydrogen_sale_price,
+    pv_export_price_eur_per_mwh
+):
+    """
+    Runs simulate_hybrid_operation once per baseline load fraction (the
+    physical operation does not depend on electricity price), then
+    layers each tested electricity price on top to compute the
+    resulting OPEX, LCOH, and NPV.
+
+    fixed_annual_opex_eur is the existing CAPEX-based OPEX (pem_opex_fraction
+    of pem_capex_eur), unrelated to purchased electricity. Purchased
+    electricity cost and month-specific lost-PV-export opportunity cost are
+    added on top. The scalar pv_export_price_eur_per_mwh argument is retained
+    only for backward compatibility and is not used for current calculations.
+
+    Returns a long-format DataFrame, one row per (baseline load, price) combination.
+    """
+
+    operation_cache = {
+        baseline: simulate_hybrid_operation(df, selected_pem_mw, baseline)
+        for baseline in baseline_load_fractions
+    }
+
+    records = []
+
+    for baseline in baseline_load_fractions:
+        op = operation_cache[baseline]
+
+        for price in electricity_prices_eur_per_mwh:
+
+            electricity_cost_eur = op["purchased_energy_mwh"] * price
+            opportunity_cost_eur, _ = calculate_2023_pv_opportunity_cost(
+                df, op["lost_export_w"]
+            )
+            total_annual_cost = (
+                fixed_annual_opex_eur
+                + electricity_cost_eur
+                + opportunity_cost_eur
+            )
+
+            if op["annual_h2_kg"] > 0:
+                lcoh = calculate_discounted_lcoh(
+                    pem_capex_eur, total_annual_cost, op["annual_h2_kg"],
+                    discount_rate, project_lifetime_years
+                )
+            else:
+                lcoh = np.nan
+
+            annual_revenue = op["annual_h2_kg"] * hydrogen_sale_price
+            annual_cashflow_for_npv = annual_revenue - total_annual_cost
+            npv = calculate_npv(
+                pem_capex_eur, annual_cashflow_for_npv,
+                discount_rate, project_lifetime_years
+            )
+
+            records.append({
+                "Baseline Load (%)": baseline * 100,
+                "Electricity Price (€/MWh)": price,
+                "H2 (kg/year)": op["annual_h2_kg"],
+                "Utilization (%)": op["utilization_pct"],
+                "Operating Hours (h)": op["operating_hours"],
+                "Full-Load Hours (h)": op["full_load_hours"],
+                "PV Energy to PEM (MWh)": op["pv_energy_to_pem_mwh"],
+                "Purchased Energy (MWh)": op["purchased_energy_mwh"],
+                "Total PEM Energy (MWh)": op["total_pem_energy_mwh"],
+                "Share PEM Energy from PV (%)": op["share_pem_energy_from_pv_pct"],
+                "Residual Curtailment (MWh)": op["residual_curtailment_mwh"],
+                "Lost Export Energy (MWh)": op["lost_export_mwh"],
+                "PV Opportunity Cost (€/year)": opportunity_cost_eur,
+                "Electricity Expenditure (€/year)": electricity_cost_eur,
+                "Total Annual Operating + Energy Cost (€/year)": total_annual_cost,
+                "LCOH (€/kg H2)": lcoh,
+                "NPV (€)": npv,
+            })
+
+    return pd.DataFrame(records)
+
+###
+def calculate_cyprus_2023_industrial_benchmark(
+    df,
+    selected_pem_mw,
+    baseline_load_fractions,
+    industrial_price_eur_per_mwh,
+    pem_capex_eur,
+    fixed_annual_opex_eur,
+    discount_rate,
+    project_lifetime_years,
+    hydrogen_sale_price,
+    pv_export_price_eur_per_mwh
+):
+    """
+    Evaluate the hybrid PEM operating strategy using a representative
+    Cyprus 2023 industrial electricity-purchase benchmark.
+
+    The PEM is treated as a generic large MV/HV industrial consumer.
+
+    IMPORTANT:
+    This electricity price is not a historical DAM clearing price.
+    It is a representative industrial electricity-cost benchmark.
+    """
+
+    results = hybrid_strategy_sensitivity(
+        df=df,
+        selected_pem_mw=selected_pem_mw,
+        baseline_load_fractions=baseline_load_fractions,
+        electricity_prices_eur_per_mwh=[industrial_price_eur_per_mwh],
+        pem_capex_eur=pem_capex_eur,
+        fixed_annual_opex_eur=fixed_annual_opex_eur,
+        discount_rate=discount_rate,
+        project_lifetime_years=project_lifetime_years,
+        hydrogen_sale_price=hydrogen_sale_price,
+        pv_export_price_eur_per_mwh=pv_export_price_eur_per_mwh
+    )
+
+    results["Scenario"] = "Cyprus 2023 MV/HV industrial benchmark"
+
+    return results
+###
 ###
 
 # Economic assumptions
@@ -388,12 +763,13 @@ def calculate_npv(initial_capex, annual_cashflow, discount_rate, project_lifetim
 
 
 def calculate_npv_price_sensitivity(hydrogen_price_scenarios, selected_h2_kg,
-        annual_opex, pem_capex_eur, discount_rate, project_lifetime_years):
+        annual_opex, annual_opportunity_cost_eur, pem_capex_eur,
+        discount_rate, project_lifetime_years):
     # annual_cashflow = revenue - opex only (CAPEX handled as lump sum in calculate_npv)
     npv_results = []
     for h2_price in hydrogen_price_scenarios:
         annual_revenue = selected_h2_kg * h2_price
-        annual_cashflow_for_npv = annual_revenue - annual_opex
+        annual_cashflow_for_npv = annual_revenue - annual_opex - annual_opportunity_cost_eur
         npv = calculate_npv(pem_capex_eur, annual_cashflow_for_npv, discount_rate, project_lifetime_years)
         npv_results.append(npv)
     return npv_results
@@ -471,101 +847,125 @@ def calculate_discounted_lcoh(pem_capex_eur, annual_opex, annual_h2_kg,
     return lcoh
 
 
+
+def calculate_break_even_hydrogen_price(
+    pem_capex_eur, annual_operating_and_energy_cost_eur, annual_h2_kg,
+    discount_rate, project_lifetime_years
+):
+    """
+    Constant real H2 selling price (EUR/kg) that gives NPV = 0 when annual
+    H2 output and annual operating/energy cost are assumed constant. Under
+    those assumptions it is numerically equal to the annualized LCOH.
+    """
+    if annual_h2_kg <= 0:
+        return np.nan
+    crf = (discount_rate * (1 + discount_rate) ** project_lifetime_years) / (
+        (1 + discount_rate) ** project_lifetime_years - 1
+    )
+    annualized_capex_eur = pem_capex_eur * crf
+    return (annualized_capex_eur + annual_operating_and_energy_cost_eur) / annual_h2_kg
+
 def calculate_discounted_lcoh_for_capex_scenarios(selected_pem_mw, annual_h2_kg,
-        pem_capex_scenarios, discount_rate, project_lifetime_years):
+        pem_capex_scenarios, discount_rate, project_lifetime_years,
+        annual_opportunity_cost_eur=0.0):
     lcoh_results = []
     for capex_per_kw in pem_capex_scenarios:
         pem_capex_eur = selected_pem_mw * 1000 * capex_per_kw
         annual_opex = pem_capex_eur * pem_opex_fraction
-        lcoh = calculate_discounted_lcoh(pem_capex_eur, annual_opex, annual_h2_kg,
-                discount_rate, project_lifetime_years)
+        lcoh = calculate_discounted_lcoh(
+            pem_capex_eur, annual_opex + annual_opportunity_cost_eur, annual_h2_kg,
+            discount_rate, project_lifetime_years
+        )
         lcoh_results.append(lcoh)
     return lcoh_results
 
 
 def calculate_discounted_lcoh_vs_grid_limit(df, grid_limits_mw, selected_pem_mw,
-        discount_rate, project_lifetime_years):
+        discount_rate, project_lifetime_years, pv_export_price_eur_per_mwh):
     results = []
     for grid_limit_mw in grid_limits_mw:
-        curtailed_power_w, curtailed_energy_mwh = calculate_hourly_curtailment(df, grid_limit_mw)
-        pem_input_w = curtailed_power_w.clip(upper=selected_pem_mw * 1_000_000)
-        #annual_h2_kg = pem_input_w.sum() / 1_000_000 * 1000 / kwh_per_kg_h2
-        pem_size_w = selected_pem_mw * 1_000_000
-        _, annual_h2_kg = calculate_hydrogen_from_pem_input(pem_input_w.values, pem_size_w)
+        op = simulate_nonhybrid_operation(df, selected_pem_mw, grid_limit_mw)
+        annual_h2_kg = op["annual_h2_kg"]
         pem_capex_eur = selected_pem_mw * 1000 * pem_capex_per_kw
         annual_opex = pem_capex_eur * pem_opex_fraction
-        lcoh = calculate_discounted_lcoh(pem_capex_eur, annual_opex, annual_h2_kg,
-                discount_rate, project_lifetime_years)
-        results.append(lcoh)
+        opportunity_cost_eur, _ = calculate_2023_pv_opportunity_cost(
+            df, op["lost_export_w"]
+        )
+        results.append(calculate_discounted_lcoh(
+            pem_capex_eur, annual_opex + opportunity_cost_eur, annual_h2_kg,
+            discount_rate, project_lifetime_years
+        ))
     return results
 
 
-def calculate_lcoh_for_capex_scenarios(selected_pem_mw, annual_h2_kg, pem_capex_scenarios):
+def calculate_lcoh_for_capex_scenarios(selected_pem_mw, annual_h2_kg, pem_capex_scenarios,
+        annual_opportunity_cost_eur=0.0):
     lcoh_results = []
     for capex_per_kw in pem_capex_scenarios:
         pem_capex_eur = selected_pem_mw * 1000 * capex_per_kw
         annual_opex = pem_capex_eur * pem_opex_fraction
-        lcoh = calculate_simple_lcoh(pem_capex_eur, annual_opex, annual_h2_kg, project_lifetime_years)
+        lcoh = calculate_simple_lcoh(
+            pem_capex_eur, annual_opex + annual_opportunity_cost_eur, annual_h2_kg,
+            project_lifetime_years
+        )
         lcoh_results.append(lcoh)
     return lcoh_results
 
 
-def calculate_lcoh_vs_grid_limit(df, grid_limits_mw, selected_pem_mw):
+def calculate_lcoh_vs_grid_limit(df, grid_limits_mw, selected_pem_mw, pv_export_price_eur_per_mwh):
     results = []
     for grid_limit_mw in grid_limits_mw:
-        curtailed_power_w, curtailed_energy_mwh = calculate_hourly_curtailment(df, grid_limit_mw)
-        pem_input_w = curtailed_power_w.clip(upper=selected_pem_mw * 1_000_000)
-        #annual_h2_kg = pem_input_w.sum() / 1_000_000 * 1000 / kwh_per_kg_h2
-        pem_size_w = selected_pem_mw * 1_000_000
-        _, annual_h2_kg = calculate_hydrogen_from_pem_input(pem_input_w.values, pem_size_w )
+        op = simulate_nonhybrid_operation(df, selected_pem_mw, grid_limit_mw)
+        annual_h2_kg = op["annual_h2_kg"]
         pem_capex_eur = selected_pem_mw * 1000 * pem_capex_per_kw
         annual_opex = pem_capex_eur * pem_opex_fraction
-        lcoh = calculate_simple_lcoh(pem_capex_eur, annual_opex, annual_h2_kg, project_lifetime_years)
-        results.append(lcoh)
+        opportunity_cost_eur, _ = calculate_2023_pv_opportunity_cost(
+            df, op["lost_export_w"]
+        )
+        results.append(calculate_simple_lcoh(
+            pem_capex_eur, annual_opex + opportunity_cost_eur, annual_h2_kg,
+            project_lifetime_years
+        ))
     return results
 
 
 def calculate_npv_grid_sensitivity(df, grid_limits_mw, selected_pem_mw, hydrogen_sale_price,
-        annual_opex, pem_capex_eur, discount_rate, project_lifetime_years):
-    # annual_cashflow = revenue - opex only (CAPEX handled as lump sum in calculate_npv)
+        annual_opex, pem_capex_eur, discount_rate, project_lifetime_years,
+        pv_export_price_eur_per_mwh):
     npv_grid_results = []
     for grid_limit in grid_limits_mw:
-        curtailed_power_w, _ = calculate_hourly_curtailment(df, grid_limit)
-        pem_input_w = curtailed_power_w.clip(upper=selected_pem_mw * 1_000_000)
-        _, h2_kg = calculate_hydrogen_from_pem_input(pem_input_w.values, selected_pem_mw * 1_000_000)
-        annual_revenue = h2_kg * hydrogen_sale_price
-        annual_cashflow_for_npv = annual_revenue - annual_opex
-        npv = calculate_npv(pem_capex_eur, annual_cashflow_for_npv, discount_rate, project_lifetime_years)
-        npv_grid_results.append(npv)
+        op = simulate_nonhybrid_operation(df, selected_pem_mw, grid_limit)
+        annual_revenue = op["annual_h2_kg"] * hydrogen_sale_price
+        opportunity_cost_eur, _ = calculate_2023_pv_opportunity_cost(
+            df, op["lost_export_w"]
+        )
+        annual_cashflow_for_npv = annual_revenue - annual_opex - opportunity_cost_eur
+        npv_grid_results.append(calculate_npv(
+            pem_capex_eur, annual_cashflow_for_npv, discount_rate, project_lifetime_years
+        ))
     return npv_grid_results
 
 
 def calculate_npv_heatmap_data(
-    df,
-    grid_limits_mw,
-    hydrogen_price_scenarios,
-    selected_pem_mw,
-    annual_opex,
-    pem_capex_eur,
-    discount_rate,
-    project_lifetime_years
+    df, grid_limits_mw, hydrogen_price_scenarios, selected_pem_mw,
+    annual_opex, pem_capex_eur, discount_rate, project_lifetime_years,
+    pv_export_price_eur_per_mwh
 ):
-    # annual_cashflow = revenue - opex only (CAPEX handled as lump sum in calculate_npv)
     npv_matrix = []
     for grid_limit in grid_limits_mw:
+        op = simulate_nonhybrid_operation(df, selected_pem_mw, grid_limit)
+        opportunity_cost_eur, _ = calculate_2023_pv_opportunity_cost(
+            df, op["lost_export_w"]
+        )
         row = []
-        curtailed_power_w = (df["P"] - grid_limit * 1_000_000).clip(lower=0)
-        pem_input_w = curtailed_power_w.clip(upper=selected_pem_mw * 1_000_000)
-        _, h2_kg = calculate_hydrogen_from_pem_input(pem_input_w.values, selected_pem_mw * 1_000_000)
-
         for h2_price in hydrogen_price_scenarios:
-            annual_revenue = h2_kg * h2_price
-            annual_cashflow_for_npv = annual_revenue - annual_opex
-            npv = calculate_npv(pem_capex_eur, annual_cashflow_for_npv, discount_rate, project_lifetime_years)
-            row.append(npv)
+            annual_revenue = op["annual_h2_kg"] * h2_price
+            annual_cashflow_for_npv = annual_revenue - annual_opex - opportunity_cost_eur
+            row.append(calculate_npv(
+                pem_capex_eur, annual_cashflow_for_npv, discount_rate, project_lifetime_years
+            ))
         npv_matrix.append(row)
-    npv_df = pd.DataFrame(npv_matrix, index=grid_limits_mw, columns=hydrogen_price_scenarios)
-    return npv_df
+    return pd.DataFrame(npv_matrix, index=grid_limits_mw, columns=hydrogen_price_scenarios)
 ###
 def calculate_lcoh_opex_sensitivity(
     pem_size_mw,
@@ -573,7 +973,8 @@ def calculate_lcoh_opex_sensitivity(
     opex_scenarios_per_kw_year,
     annual_h2_kg,
     discount_rate,
-    project_lifetime_years
+    project_lifetime_years,
+    annual_opportunity_cost_eur=0.0
 ):
     pem_size_kw = pem_size_mw * 1000
     pem_capex_eur = pem_size_kw * pem_capex_per_kw
@@ -594,7 +995,7 @@ def calculate_lcoh_opex_sensitivity(
         )
 
         discounted_lcoh = (
-            annualized_capex + annual_opex
+            annualized_capex + annual_opex + annual_opportunity_cost_eur
         ) / annual_h2_kg
 
         results.append(discounted_lcoh)
@@ -787,7 +1188,7 @@ def calculate_weighted_exergy_efficiency(pem_input_w, pem_size_w):
 # =========================================
 
 
-fig_counter = [0]
+fig_counter = [0]  
 def next_fig(title):
     fig_counter[0] += 1
     return fig_counter[0], f"Figure {fig_counter[0]}: {title}"
@@ -866,11 +1267,18 @@ def plot_annualized_lcoh_vs_pem_size(results_table):
             total_capex = pem_kw * capex_per_kw
             annualized_capex = total_capex * crf
             annual_opex = total_capex * pem_opex_fraction
-
+            row_op = simulate_nonhybrid_operation(
+                df, pem_mw, selected_grid_limit_mw
+            )
+            annual_opportunity_cost, _ = calculate_2023_pv_opportunity_cost(
+                df, row_op["lost_export_w"]
+            )
 
             if h2_kg_year > 0:
                 annualized_lcoh = (
-                    annualized_capex + annual_opex
+                    annualized_capex
+                    + annual_opex
+                    + annual_opportunity_cost
                 ) / h2_kg_year
             else:
                 annualized_lcoh = np.nan
@@ -889,22 +1297,34 @@ def plot_annualized_lcoh_vs_pem_size(results_table):
     plt.title(fig_title)
     plt.grid(True)
     plt.legend()
+    # Keep the explanatory annotation fully inside the axes.
+    # The arrow points to the higher-PEM region while the text position is
+    # expressed in axes-fraction coordinates, so it remains in bounds even
+    # when LCOH values change after economic-assumption updates.
+    y_anchor = np.interp(
+        2.0,
+        results_table["PEM Size (MW)"],
+        lcoh_values
+    )
     plt.annotate(
-    "Higher PEM capacity increases\nCAPEX faster than H2 output",
-    xy=(2.0, 25),
-    xytext=(2.8, 72),
-    arrowprops=dict(
-        arrowstyle="->",
-        connectionstyle="arc3,rad=0.05"
-    ),
-    fontsize=9,
-    ha="left",
-    va="center",
-    bbox=dict(
-        boxstyle="round,pad=0.3",
-        facecolor="white",
-        alpha=0.8
-    ))
+        "Higher PEM capacity increases\nCAPEX faster than H2 output",
+        xy=(2.0, y_anchor),
+        xycoords="data",
+        xytext=(0.58, 0.78),
+        textcoords="axes fraction",
+        arrowprops=dict(
+            arrowstyle="->",
+            connectionstyle="arc3,rad=0.05"
+        ),
+        fontsize=9,
+        ha="left",
+        va="center",
+        bbox=dict(
+            boxstyle="round,pad=0.3",
+            facecolor="white",
+            alpha=0.8
+        )
+    )
     
     plt.tight_layout()
 
@@ -922,62 +1342,81 @@ def plot_annualized_lcoh_vs_pem_size(results_table):
 
 ###
 def plot_curtailment_recovery_vs_pem_size(pem_sizes_mw, curtailment_recovery_results):
+    """Plot recovery curve and explicitly mark the two engineering design points."""
     fig_number, fig_title = next_fig("Curtailment Recovery vs PEM Size")
-    plt.figure(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(10, 6))
 
-    plt.plot(
-        pem_sizes_mw,
-        curtailment_recovery_results,
-        marker="o"
+    x = np.asarray(pem_sizes_mw, dtype=float)
+    y = np.asarray(curtailment_recovery_results, dtype=float)
+    ax.plot(x, y, marker="o", linewidth=1.8, label="Curtailment recovery")
+
+    # Design point 1: curtailment-oriented design point, fixed at 1.5 MW.
+    recovery_15 = float(np.interp(1.5, x, y))
+    ax.scatter([1.5], [recovery_15], s=90, zorder=5)
+    ax.annotate(
+        f"Curtailment-oriented design\n1.5 MW, {recovery_15:.1f}% recovery",
+        xy=(1.5, recovery_15), xytext=(1.85, max(recovery_15 - 12, 5)),
+        arrowprops=dict(arrowstyle="->"), fontsize=9,
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85)
     )
 
-    plt.xlabel("PEM Size (MW)")
-    plt.ylabel("Curtailment Recovery (%)")
-    plt.title(fig_title)
+    # Design point 2: smallest tested PEM size in the 2.0-2.5 MW benchmark
+    # range that reaches >=99% recovery. If neither does, show the better one.
+    candidates = [v for v in full_curtailment_benchmark_range_mw if v in x]
+    candidate_pairs = [(v, float(y[np.where(x == v)[0][0]])) for v in candidates]
+    qualifying = [(v, r) for v, r in candidate_pairs if r >= 99.0]
+    benchmark_mw, benchmark_recovery = (qualifying[0] if qualifying else max(candidate_pairs, key=lambda z: z[1]))
+    ax.scatter([benchmark_mw], [benchmark_recovery], s=90, zorder=5)
+    ax.annotate(
+        f"Full-curtailment benchmark\n{benchmark_mw:.1f} MW, {benchmark_recovery:.1f}% recovery",
+        xy=(benchmark_mw, benchmark_recovery), xytext=(benchmark_mw + 0.85, max(benchmark_recovery - 22, 5)),
+        arrowprops=dict(arrowstyle="->"), fontsize=9,
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85)
+    )
 
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(
+    ax.axhline(95, linestyle="--", linewidth=1.0, alpha=0.65, label="95% recovery")
+    ax.axhline(99, linestyle=":", linewidth=1.0, alpha=0.65, label="99% recovery")
+    ax.set_xlabel("PEM Size (MW)")
+    ax.set_ylabel("Curtailment Recovery (%)")
+    ax.set_ylim(0, 102)
+    ax.set_title(fig_title)
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(
         os.path.join(FIGURES_DIR, f"figure{fig_number:02d}_curtailment_recovery_vs_pem_size.png"),
-        dpi=300,
-        bbox_inches="tight"
+        dpi=300, bbox_inches="tight"
     )
     plt.show()
 
 ###
 def plot_curtailment_diagnostics(curtailment_diagnostics):
-    """
-    Plots the two rejection components from diagnose_pem_curtailment()
-    against PEM size: energy rejected because it falls below the PEM's
-    minimum load, and energy rejected because it exceeds PEM capacity.
-    """
-    fig_number, fig_title = next_fig("Rejected Curtailment Breakdown vs PEM Size")
+    """Plot avoided and residual PV curtailment under non-hybrid dispatch."""
+    fig_number, fig_title = next_fig("Curtailment Avoided and Residual vs PEM Size")
     plt.figure(figsize=(10, 6))
 
     plt.plot(
         curtailment_diagnostics["PEM Size (MW)"],
-        curtailment_diagnostics["Rejected Below Min Load (MWh)"],
+        curtailment_diagnostics["Avoided Curtailment (MWh)"],
         marker="o",
-        label="Rejected Below Minimum Load"
+        label="Avoided curtailment"
     )
-
     plt.plot(
         curtailment_diagnostics["PEM Size (MW)"],
-        curtailment_diagnostics["Rejected Above PEM Capacity (MWh)"],
+        curtailment_diagnostics["Residual Curtailment (MWh)"],
         marker="s",
-        label="Rejected Above PEM Capacity"
+        label="Residual curtailment"
     )
 
     plt.xlabel("PEM Size (MW)")
-    plt.ylabel("Rejected Curtailed Energy (MWh/year)")
+    plt.ylabel("PV Energy (MWh/year)")
     plt.title(fig_title)
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
     plt.savefig(
-        os.path.join(FIGURES_DIR, f"figure{fig_number:02d}_rejected_curtailment_breakdown.png"),
-        dpi=300,
-        bbox_inches="tight"
+        os.path.join(FIGURES_DIR, f"figure{fig_number:02d}_curtailment_avoided_residual.png"),
+        dpi=300, bbox_inches="tight"
     )
     plt.show()
 
@@ -1093,6 +1532,537 @@ def plot_minimum_load_sensitivity(pem_sizes_mw, sensitivity_results):
     )
     plt.show()
 #
+
+# =========================================
+# v1.3 HYBRID OPERATING STRATEGY PLOTS
+# =========================================
+
+def plot_h2_vs_baseline_load(hybrid_summary):
+    """
+    H2 production vs baseline load, one point per baseline load fraction.
+    Independent of electricity price, so uses the price=0 rows (any
+    single price would give the same H2 values).
+    """
+    fig_number, fig_title = next_fig("Hydrogen Production vs Baseline Load")
+    subset = hybrid_summary[
+        hybrid_summary["Electricity Price (€/MWh)"] == hybrid_summary["Electricity Price (€/MWh)"].iloc[0]
+    ].sort_values("Baseline Load (%)")
+
+    plt.figure(figsize=(9, 6))
+    plt.plot(subset["Baseline Load (%)"], subset["H2 (kg/year)"], marker="o")
+    plt.xlabel("Baseline Load (% of PEM capacity)")
+    plt.ylabel("Hydrogen Production (kg/year)")
+    plt.title(fig_title)
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(
+        os.path.join(FIGURES_DIR, f"figure{fig_number:02d}_h2_vs_baseline_load.png"),
+        dpi=300,
+        bbox_inches="tight"
+    )
+    plt.show()
+
+
+def plot_utilization_vs_baseline_load(hybrid_summary):
+    fig_number, fig_title = next_fig("PEM Utilization vs Baseline Load")
+    subset = hybrid_summary[
+        hybrid_summary["Electricity Price (€/MWh)"] == hybrid_summary["Electricity Price (€/MWh)"].iloc[0]
+    ].sort_values("Baseline Load (%)")
+
+    plt.figure(figsize=(9, 6))
+    plt.plot(subset["Baseline Load (%)"], subset["Utilization (%)"], marker="o")
+    plt.xlabel("Baseline Load (% of PEM capacity)")
+    plt.ylabel("Utilization (%)")
+    plt.title(fig_title)
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(
+        os.path.join(FIGURES_DIR, f"figure{fig_number:02d}_utilization_vs_baseline_load.png"),
+        dpi=300,
+        bbox_inches="tight"
+    )
+    plt.show()
+
+
+def plot_purchased_electricity_vs_baseline_load(hybrid_summary):
+    fig_number, fig_title = next_fig("Purchased Electricity vs Baseline Load")
+    subset = hybrid_summary[
+        hybrid_summary["Electricity Price (€/MWh)"] == hybrid_summary["Electricity Price (€/MWh)"].iloc[0]
+    ].sort_values("Baseline Load (%)")
+
+    plt.figure(figsize=(9, 6))
+    plt.plot(subset["Baseline Load (%)"], subset["Purchased Energy (MWh)"], marker="o", label="Purchased")
+    plt.plot(subset["Baseline Load (%)"], subset["PV Energy to PEM (MWh)"], marker="s", label="PV to PEM")
+    plt.xlabel("Baseline Load (% of PEM capacity)")
+    plt.ylabel("Annual Electricity (MWh)")
+    plt.title(fig_title)
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(
+        os.path.join(FIGURES_DIR, f"figure{fig_number:02d}_purchased_electricity_vs_baseline_load.png"),
+        dpi=300,
+        bbox_inches="tight"
+    )
+    plt.show()
+
+
+def plot_lcoh_vs_baseline_load_multi_price(hybrid_summary, reference_lcoh=None):
+    """
+    LCOH vs baseline load, one line per tested electricity price.
+    reference_lcoh, if given, is drawn as a horizontal dashed line
+    marking the non-hybrid base-case LCOH, so the hybrid strategy can
+    be visually checked against the v1.2 baseline.
+    """
+    fig_number, fig_title = next_fig("LCOH vs Baseline Load (by Electricity Price)")
+    plt.figure(figsize=(10, 6))
+
+    for price in sorted(hybrid_summary["Electricity Price (€/MWh)"].unique()):
+        subset = hybrid_summary[
+            hybrid_summary["Electricity Price (€/MWh)"] == price
+        ].sort_values("Baseline Load (%)")
+        plt.plot(
+            subset["Baseline Load (%)"],
+            subset["LCOH (€/kg H2)"],
+            marker="o",
+            label=f"{price} €/MWh"
+        )
+
+    if reference_lcoh is not None:
+        plt.axhline(
+            y=reference_lcoh,
+            linestyle="--",
+            color="black",
+            label=f"non-hybrid base case ({reference_lcoh:.2f} €/kg)"
+        )
+
+    plt.xlabel("Baseline Load (% of PEM capacity)")
+    plt.ylabel("Discounted LCOH (€/kg H2)")
+    plt.title(fig_title)
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(
+        os.path.join(FIGURES_DIR, f"figure{fig_number:02d}_lcoh_vs_baseline_load.png"),
+        dpi=300,
+        bbox_inches="tight"
+    )
+    plt.show()
+
+
+def plot_npv_vs_baseline_load_multi_price(hybrid_summary, reference_npv=None):
+    fig_number, fig_title = next_fig("NPV vs Baseline Load (by Electricity Price)")
+    plt.figure(figsize=(10, 6))
+
+    for price in sorted(hybrid_summary["Electricity Price (€/MWh)"].unique()):
+        subset = hybrid_summary[
+            hybrid_summary["Electricity Price (€/MWh)"] == price
+        ].sort_values("Baseline Load (%)")
+        plt.plot(
+            subset["Baseline Load (%)"],
+            subset["NPV (€)"] / 1_000_000,
+            marker="o",
+            label=f"{price} €/MWh"
+        )
+
+    plt.axhline(y=0, linestyle=":", color="gray")
+
+    if reference_npv is not None:
+        plt.axhline(
+            y=reference_npv / 1_000_000,
+            linestyle="--",
+            color="black",
+            label=f"non-hybrid base case ({reference_npv/1_000_000:.2f} M€)"
+        )
+
+    plt.xlabel("Baseline Load (% of PEM capacity)")
+    plt.ylabel("NPV (M€)")
+    plt.title(fig_title)
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(
+        os.path.join(FIGURES_DIR, f"figure{fig_number:02d}_npv_vs_baseline_load.png"),
+        dpi=300,
+        bbox_inches="tight"
+    )
+    plt.show()
+
+
+def plot_hybrid_strategy_heatmap(hybrid_summary, baseline_load_fractions, electricity_prices_eur_per_mwh, reference_lcoh=None):
+    """
+    Heatmap of discounted LCOH (€/kg H2) across baseline load and electricity price.
+    Every cell is labelled numerically. The minimum-LCOH cell in each
+    electricity-price column is marked with a star and a rectangular outline.
+    """
+    fig_number, fig_title = next_fig("Hybrid Strategy LCOH Heatmap")
+
+    pivot = hybrid_summary.pivot(
+        index="Baseline Load (%)",
+        columns="Electricity Price (€/MWh)",
+        values="LCOH (€/kg H2)"
+    ).reindex(
+        index=[b * 100 for b in baseline_load_fractions],
+        columns=electricity_prices_eur_per_mwh
+    )
+
+    fig, ax = plt.subplots(figsize=(13, 7))
+    image = ax.imshow(pivot.values, aspect="auto", cmap="viridis_r")
+    fig.colorbar(image, ax=ax, label="Discounted LCOH (€/kg H2)")
+
+    ax.set_xticks(range(len(pivot.columns)))
+    ax.set_xticklabels([f"{v:g}" for v in pivot.columns])
+    ax.set_yticks(range(len(pivot.index)))
+    ax.set_yticklabels([f"{v:.0f}" for v in pivot.index])
+    ax.set_xlabel("Electricity Price (€/MWh)")
+    ax.set_ylabel("Baseline Load (%)")
+
+    # Numeric value in every cell
+    for row_i in range(pivot.shape[0]):
+        for col_i in range(pivot.shape[1]):
+            value = pivot.iloc[row_i, col_i]
+            if np.isfinite(value):
+                ax.text(col_i, row_i, f"{value:.2f}", ha="center", va="center", fontsize=8)
+
+    # Mark the minimum LCOH in every electricity-price column
+    for col_i, column in enumerate(pivot.columns):
+        column_values = pivot[column]
+        if column_values.notna().any():
+            min_baseline = column_values.idxmin()
+            row_i = pivot.index.get_loc(min_baseline)
+            ax.text(
+                col_i, row_i - 0.28, "★",
+                ha="center", va="center", fontsize=11, color="black"
+            )
+
+    title = fig_title
+    if reference_lcoh is not None:
+        title += f"\n(non-hybrid base case reference: {reference_lcoh:.2f} €/kg H2)"
+    ax.set_title(title)
+
+    plt.tight_layout()
+    plt.savefig(
+        os.path.join(FIGURES_DIR, f"figure{fig_number:02d}_hybrid_strategy_heatmap.png"),
+        dpi=300,
+        bbox_inches="tight"
+    )
+    plt.show()
+
+
+def resolve_dispatch_plot_date(df, grid_limit_mw, requested_date="AUTO"):
+    """Return requested date or automatically choose the day with maximum gross no-PEM curtailment."""
+    if str(requested_date).upper() != "AUTO":
+        return str(requested_date)
+
+    temp = df[["time", "P"]].copy()
+    temp["date"] = temp["time"].dt.strftime("%Y-%m-%d")
+    temp["gross_curtailment_w"] = np.maximum(
+        temp["P"].to_numpy(dtype=float) - grid_limit_mw * 1_000_000, 0.0
+    )
+    daily = temp.groupby("date")["gross_curtailment_w"].sum()
+    if daily.empty:
+        raise ValueError("Cannot determine an extreme-curtailment day from the PV dataset.")
+    return str(daily.idxmax())
+
+
+def plot_daily_dispatch(df, selected_pem_mw, selected_grid_limit_mw, date_string,
+                        hybrid_baseline_fraction=0.20, strategy="hybrid"):
+    """
+    Representative-day dispatch plot.
+
+    Visual convention requested for Figures 16 and 17:
+      - PV generation: thick ORANGE line.
+      - Hours with gross curtailment: RED dotted overlay on the PV curve.
+      - Grid electricity supplied to PEM: thick GREY line.
+      - Hydrogen energy output: thick BLUE line.
+      - PEM electricity use is shown as filled areas from the x-axis:
+            orange = PV supplied to PEM,
+            grey   = grid electricity supplied to PEM.
+      - PEM rated capacity and requested baseline are retained on the PEM/H2 axis.
+
+    Left y-axis  : PV generation (MW).
+    Right y-axis : PEM electrical input and H2 energy output (MW).
+    """
+    day_mask = df["time"].dt.strftime("%Y-%m-%d") == date_string
+    day_df = df.loc[day_mask].copy()
+    if day_df.empty:
+        raise ValueError(f"No PVGIS records found for {date_string}.")
+
+    if strategy == "hybrid":
+        op = simulate_hybrid_operation(
+            day_df,
+            selected_pem_mw,
+            hybrid_baseline_fraction,
+            selected_grid_limit_mw
+        )
+        baseline_w = hybrid_baseline_fraction * selected_pem_mw * 1_000_000
+        title_suffix = "Hybrid PV-Priority Dispatch"
+        pv_to_pem_w = op["pv_to_pem_w"]
+        grid_to_pem_w = op["purchased_w"]
+        gross_curtailment_w = op["gross_curtailment_without_pem_w"]
+        residual_curtailment_w = op["residual_curtailment_w"]
+        pem_power_w = op["pem_power_w"]
+
+    elif strategy == "nonhybrid":
+        op = simulate_nonhybrid_operation(
+            day_df,
+            selected_pem_mw,
+            selected_grid_limit_mw
+        )
+        baseline_w = MIN_PEM_LOAD_FRACTION * selected_pem_mw * 1_000_000
+        title_suffix = "Non-Hybrid PV Minimum-Load + Curtailment Ramping"
+        pv_to_pem_w = op["pv_to_pem_w"]
+        grid_to_pem_w = np.zeros_like(pv_to_pem_w)
+        gross_curtailment_w = op["potential_curtailment_w"]
+        residual_curtailment_w = op.get(
+            "residual_curtailment_w",
+            np.maximum(
+                day_df["P"].to_numpy(dtype=float)
+                - pv_to_pem_w
+                - selected_grid_limit_mw * 1_000_000,
+                0.0
+            )
+        )
+        pem_power_w = op["pem_power_w"]
+
+    else:
+        raise ValueError("strategy must be 'hybrid' or 'nonhybrid'.")
+
+    hours = day_df["time"].dt.hour.to_numpy()
+    pv_mw = day_df["P"].to_numpy(dtype=float) / 1_000_000
+    pv_to_pem_mw = np.asarray(pv_to_pem_w, dtype=float) / 1_000_000
+    grid_to_pem_mw = np.asarray(grid_to_pem_w, dtype=float) / 1_000_000
+    pem_total_mw = np.asarray(pem_power_w, dtype=float) / 1_000_000
+    gross_curtailment_mw = np.asarray(gross_curtailment_w, dtype=float) / 1_000_000
+    residual_curtailment_mw = np.asarray(residual_curtailment_w, dtype=float) / 1_000_000
+
+    # Hourly H2 mass (kg/h for a 1-hour timestep) -> average chemical power (MW, LHV).
+    h2_lhv_mw = (
+        np.asarray(op["hourly_h2_kg"], dtype=float)
+        * h2_lower_heating_value_kwh_per_kg
+        / 1000.0
+    )
+
+    # Plot the red dotted curtailment marker only where curtailment exists.
+    # It overlays the PV generation curve at those hours, so visually the orange
+    # PV curve changes to a red dotted segment whenever the counterfactual plant
+    # output would exceed the export limit.
+    curtailment_mask = gross_curtailment_mw > 1e-9
+    curtailed_pv_overlay_mw = np.where(curtailment_mask, pv_mw, np.nan)
+
+    fig_number, fig_title = next_fig(f"{title_suffix} on {date_string}")
+    fig, ax_pv = plt.subplots(figsize=(12, 6))
+    ax_pem = ax_pv.twinx()
+
+    # ---------------------------------------------------------
+    # LEFT AXIS, PV-side quantities
+    # ---------------------------------------------------------
+    pv_line, = ax_pv.plot(
+        hours,
+        pv_mw,
+        color="tab:orange",
+        linewidth=3.0,
+        label="PV generation (MW)",
+        zorder=5
+    )
+
+    curtailment_line, = ax_pv.plot(
+        hours,
+        curtailed_pv_overlay_mw,
+        color="tab:red",
+        linestyle=":",
+        linewidth=3.0,
+        label="PV generation during curtailment hours",
+        zorder=7
+    )
+
+    # ---------------------------------------------------------
+    # RIGHT AXIS, PEM input and H2 output
+    # ---------------------------------------------------------
+    # Filled PEM-use areas. PV is the first layer from the x-axis. Grid top-up,
+    # when present, is stacked immediately above it so total filled height equals
+    # total PEM electrical input.
+    pv_fill = ax_pem.fill_between(
+        hours,
+        0,
+        pv_to_pem_mw,
+        color="tab:orange",
+        alpha=0.28,
+        label="PEM input from PV",
+        zorder=1
+    )
+
+    grid_fill = ax_pem.fill_between(
+        hours,
+        pv_to_pem_mw,
+        pv_to_pem_mw + grid_to_pem_mw,
+        where=grid_to_pem_mw > 1e-12,
+        interpolate=True,
+        color="0.55",
+        alpha=0.38,
+        label="PEM input from grid",
+        zorder=2
+    )
+
+    # Thick grey grid line, exactly the purchased-grid contribution to PEM.
+    grid_line, = ax_pem.plot(
+        hours,
+        grid_to_pem_mw,
+        color="0.35",
+        linewidth=3.2,
+        label="Grid power to PEM (MW)",
+        zorder=8
+    )
+
+    # Total PEM input is kept as a thin neutral boundary, not a dominant curve.
+    pem_boundary, = ax_pem.plot(
+        hours,
+        pem_total_mw,
+        color="0.20",
+        linewidth=1.2,
+        alpha=0.75,
+        label="Total PEM electrical input (MW)",
+        zorder=6
+    )
+
+    # Thick blue H2 output curve.
+    h2_line, = ax_pem.plot(
+        hours,
+        h2_lhv_mw,
+        color="tab:blue",
+        linewidth=3.2,
+        label="H2 energy output (MW, LHV)",
+        zorder=9
+    )
+
+    rated_line = ax_pem.axhline(
+        selected_pem_mw,
+        color="0.25",
+        linestyle="--",
+        linewidth=1.5,
+        label=f"PEM rated capacity ({selected_pem_mw:.1f} MW)",
+        zorder=4
+    )
+
+    baseline_line = ax_pem.axhline(
+        baseline_w / 1_000_000,
+        color="0.40",
+        linestyle=":",
+        linewidth=1.5,
+        label=f"Requested baseline ({baseline_w/1_000_000:.2f} MW)",
+        zorder=4
+    )
+
+    # ---------------------------------------------------------
+    # AXES / TITLES / LIMITS
+    # ---------------------------------------------------------
+    ax_pv.set_xlim(0, 23)
+    ax_pv.set_xticks(range(0, 24, 2))
+    ax_pv.set_xlabel("Hour of day")
+    ax_pv.set_ylabel("PV Power (MW)")
+    ax_pem.set_ylabel("PEM Input / H2 Energy Output (MW)")
+
+    ax_pv.set_ylim(bottom=0)
+    right_axis_max = max(
+        selected_pem_mw * 1.30,
+        float(np.nanmax(pem_total_mw)) * 1.18 if len(pem_total_mw) else 0.0,
+        float(np.nanmax(h2_lhv_mw)) * 1.25 if len(h2_lhv_mw) else 0.0,
+        0.5
+    )
+    ax_pem.set_ylim(0, right_axis_max)
+
+    ax_pv.set_title(
+        f"{fig_title}\n"
+        f"(PEM size = {selected_pem_mw:.1f} MW, "
+        f"baseline = {baseline_w/1_000_000:.2f} MW)"
+    )
+    ax_pv.grid(True, alpha=0.25)
+
+    # One combined legend, ordered by physical meaning.
+    handles = [
+        pv_line,
+        curtailment_line,
+        pv_fill,
+    ]
+    if strategy == "hybrid":
+        handles += [grid_fill, grid_line]
+    handles += [
+        pem_boundary,
+        h2_line,
+        rated_line,
+        baseline_line,
+    ]
+    labels = [h.get_label() for h in handles]
+    ax_pv.legend(handles, labels, loc="upper left", fontsize=8, ncol=2)
+
+    # Dispatch diagnostics printed to console. These are useful for checking that
+    # the visualized areas correspond to the physical hourly power balance.
+    pv_to_pem_day_mwh = float(np.nansum(pv_to_pem_mw))
+    grid_to_pem_day_mwh = float(np.nansum(grid_to_pem_mw))
+    pem_day_mwh = float(np.nansum(pem_total_mw))
+    gross_curt_day_mwh = float(np.nansum(gross_curtailment_mw))
+    residual_curt_day_mwh = float(np.nansum(residual_curtailment_mw))
+    h2_day_kg = float(np.nansum(op["hourly_h2_kg"]))
+
+    assert np.all(pv_to_pem_mw >= -1e-9), "Negative PV-to-PEM power detected."
+    assert np.all(grid_to_pem_mw >= -1e-9), "Negative grid-to-PEM power detected."
+    assert np.all(pem_total_mw <= selected_pem_mw + 1e-9), "PEM rated capacity exceeded."
+    assert np.allclose(
+        pem_total_mw,
+        pv_to_pem_mw + grid_to_pem_mw,
+        atol=1e-7
+    ), "PEM input does not equal PV contribution plus grid contribution."
+
+    print(
+        f"Figure {fig_number} dispatch check [{strategy}, {date_string}]: "
+        f"PV->PEM={pv_to_pem_day_mwh:.2f} MWh, "
+        f"Grid->PEM={grid_to_pem_day_mwh:.2f} MWh, "
+        f"PEM input={pem_day_mwh:.2f} MWh, "
+        f"gross curtailment={gross_curt_day_mwh:.2f} MWh, "
+        f"residual curtailment={residual_curt_day_mwh:.2f} MWh, "
+        f"H2={h2_day_kg:.1f} kg"
+    )
+
+    fig.tight_layout()
+    fig.savefig(
+        os.path.join(FIGURES_DIR, f"figure{fig_number:02d}_{strategy}_daily_dispatch.png"),
+        dpi=300,
+        bbox_inches="tight"
+    )
+    plt.show()
+
+def calculate_optimal_baseline_by_electricity_price(hybrid_summary):
+    """
+    For each tested electricity price, identify both:
+      1. the baseline load that minimizes discounted LCOH, and
+      2. the baseline load that maximizes NPV.
+
+    This is calculated directly from hybrid_summary, so the table and
+    the heatmap/curves cannot drift apart because of hard-coded values.
+    """
+    records = []
+
+    for price in sorted(hybrid_summary["Electricity Price (€/MWh)"].unique()):
+        subset = hybrid_summary[
+            hybrid_summary["Electricity Price (€/MWh)"] == price
+        ].copy()
+
+        lcoh_row = subset.loc[subset["LCOH (€/kg H2)"].idxmin()]
+        npv_row = subset.loc[subset["NPV (€)"].idxmax()]
+
+        records.append({
+            "Price (€/MWh)": price,
+            "LCOH-optimal baseline (%)": lcoh_row["Baseline Load (%)"],
+            "Minimum LCOH (€/kg H2)": lcoh_row["LCOH (€/kg H2)"],
+            "NPV at LCOH optimum (€)": lcoh_row["NPV (€)"],
+            "NPV-optimal baseline (%)": npv_row["Baseline Load (%)"],
+            "Maximum NPV (€)": npv_row["NPV (€)"],
+            "LCOH at NPV optimum (€/kg H2)": npv_row["LCOH (€/kg H2)"],
+        })
+
+    return pd.DataFrame(records)
+
+#
 # =========================================
 # MAIN EXECUTION
 # =========================================
@@ -1117,11 +2087,58 @@ h2_results = []
 utilization_results = []
 
 # ====== GRID LIMIT & CURTAILMENT SETUP =====
-selected_pem_mw = 1
 selected_grid_limit_mw = 6
 
+# Select PEM size automatically by MINIMUM opportunity-cost-adjusted LCOH
+# under the non-hybrid strategy and base-case CAPEX assumption.
+pem_sizing_lcoh_with_opportunity = []
+for candidate_pem_mw in pem_sizes_mw:
+    candidate_op = simulate_nonhybrid_operation(
+        df, candidate_pem_mw, selected_grid_limit_mw
+    )
+    candidate_capex_eur = candidate_pem_mw * 1000 * pem_capex_per_kw
+    candidate_fixed_opex_eur = candidate_capex_eur * pem_opex_fraction
+    candidate_opportunity_cost_eur, _ = calculate_2023_pv_opportunity_cost(
+        df, candidate_op["lost_export_w"]
+    )
+    candidate_lcoh = calculate_discounted_lcoh(
+        candidate_capex_eur,
+        candidate_fixed_opex_eur + candidate_opportunity_cost_eur,
+        candidate_op["annual_h2_kg"],
+        discount_rate,
+        project_lifetime_years
+    )
+    pem_sizing_lcoh_with_opportunity.append(candidate_lcoh)
+
+# Engineering design selection: keep the curtailment-oriented design fixed at 1.5 MW.
+# The purely economic minimum is still calculated above and reported as a diagnostic,
+# but it no longer overrides the selected design point.
+economic_optimum_index = int(np.nanargmin(pem_sizing_lcoh_with_opportunity))
+economic_optimum_pem_mw = float(pem_sizes_mw[economic_optimum_index])
+selected_pem_mw = 1.5
+selected_pem_index = pem_sizes_mw.index(selected_pem_mw)
+
+print(
+    f"Selected curtailment-oriented PEM design: {selected_pem_mw:.2f} MW"
+)
+print(
+    f"Economic minimum-LCOH diagnostic: {economic_optimum_pem_mw:.2f} MW "
+    f"({pem_sizing_lcoh_with_opportunity[economic_optimum_index]:.2f} €/kg H2)"
+)
+
 df["curtailed_power_w"], selected_curtailed_mwh = calculate_hourly_curtailment(df, selected_grid_limit_mw)
-df["pem_input_w"], selected_h2_kg = calculate_selected_pem_input(df, selected_pem_mw)
+selected_nonhybrid_op = simulate_nonhybrid_operation(
+    df, selected_pem_mw, selected_grid_limit_mw
+)
+# Selected non-hybrid base case now uses PV minimum-load operation plus curtailment ramping.
+df["pem_input_w"] = pd.Series(selected_nonhybrid_op["pem_power_w"], index=df.index)
+selected_h2_kg = selected_nonhybrid_op["annual_h2_kg"]
+selected_lost_export_mwh = selected_nonhybrid_op["lost_export_mwh"]
+selected_opportunity_cost_eur, selected_monthly_opportunity_cost = (
+    calculate_2023_pv_opportunity_cost(
+        df, selected_nonhybrid_op["lost_export_w"]
+    )
+)
 
 # ===== MINIMUM-LOAD SENSITIVITY (recovery vs PEM size, per min-load assumption) =====
 min_load_sensitivity_results = minimum_load_sensitivity(
@@ -1146,7 +2163,7 @@ selected_water_m3 = (
 )
 
 print(f"\n--- SELECTED BASE CASE ---")
-print(f"PEM Size: {selected_pem_mw} MW")
+print(f"PEM Size: {selected_pem_mw} MW (curtailment-oriented design point)")
 print(f"Grid Export Limit: {selected_grid_limit_mw} MW")
 print(f"Curtailed PV Energy: {selected_curtailed_mwh:.1f} MWh/year")
 print(f"Hydrogen Production: {selected_h2_kg:.0f} kg/year")
@@ -1157,17 +2174,12 @@ curtailment_diagnostics = diagnose_pem_curtailment(df, pem_sizes_mw)
 print("\nCurtailment Diagnostics:")
 print(curtailment_diagnostics.to_string(index=False))
 
-print("\nRejected Curtailment Breakdown:")
+print("\nCurtailment Avoided / Residual by PEM Size:")
 for _, row in curtailment_diagnostics.iterrows():
-    total_rejected = (
-        row["Rejected Below Min Load (MWh)"]
-        + row["Rejected Above PEM Capacity (MWh)"]
-    )
     print(
         f"PEM {row['PEM Size (MW)']:.2f} MW | "
-        f"Below minimum load: {row['Rejected Below Min Load (MWh)']:.1f} MWh | "
-        f"Above PEM capacity: {row['Rejected Above PEM Capacity (MWh)']:.1f} MWh | "
-        f"Total rejected: {total_rejected:.1f} MWh"
+        f"Avoided: {row['Avoided Curtailment (MWh)']:.1f} MWh | "
+        f"Residual: {row['Residual Curtailment (MWh)']:.1f} MWh"
     )
 
 #
@@ -1198,13 +2210,24 @@ for capex_scenario in pem_capex_scenarios:
     results_table[f"CAPEX @{capex_scenario} €/kW"] = capex_col
 print(results_table.to_string(index=False))
 
+# ===== DYNAMIC PEM-SIZING OPTIMUM =====
+# Used by assertions and final conclusions, never hard-coded.
+max_h2_index = int(np.nanargmax(np.asarray(h2_results, dtype=float)))
+max_h2_pem_mw = float(pem_sizes_results[max_h2_index])
+max_h2_kg_year = float(h2_results[max_h2_index])
+
+assert max_h2_pem_mw in pem_sizes_mw, \
+    "FAILED: Maximum-H2 PEM size not found in tested PEM sizes."
+
+assert len(pem_sizes_results) == len(h2_results), \
+    "FAILED: PEM-size and H2-result arrays have different lengths."
+
 # ====== GRID LIMIT SENSITIVITY ======
 print("\nGrid Limit Sensitivity:")
 for grid_limit_mw in grid_limits_mw:
     curtailed_power_w, curtailed_mwh = calculate_hourly_curtailment(df, grid_limit_mw)
-    #h2_from_grid_limit_kg = curtailed_mwh * 1000 / kwh_per_kg_h2
-    pem_input_w = curtailed_power_w.clip(upper=selected_pem_mw * 1_000_000)
-    _, h2_from_grid_limit_kg = calculate_hydrogen_from_pem_input(pem_input_w.values, selected_pem_mw * 1_000_000)
+    op_grid = simulate_nonhybrid_operation(df, selected_pem_mw, grid_limit_mw)
+    h2_from_grid_limit_kg = op_grid["annual_h2_kg"]
     ###
     print(
     f"  Grid limit: {grid_limit_mw} MW "
@@ -1216,21 +2239,9 @@ for grid_limit_mw in grid_limits_mw:
 pem_size_w = selected_pem_mw * 1_000_000
 print("\nElectrolyzer Operating Hours Analysis:")
 for grid_limit_mw in grid_limits_mw:
-    curtailed_power_w, _ = calculate_hourly_curtailment(df, grid_limit_mw)
-    pem_input_w = curtailed_power_w.clip(upper=pem_size_w)
-    load_fraction = pem_input_w / pem_size_w
-
-    active = load_fraction >= MIN_PEM_LOAD_FRACTION
-
-    pem_power_used_w = np.where(
-    active,
-    pem_input_w,
-    0.0
-    )
-
-    operating_hours = active.sum()
-
-    full_load_hours = pem_power_used_w.sum() / pem_size_w
+    op_grid = simulate_nonhybrid_operation(df, selected_pem_mw, grid_limit_mw)
+    operating_hours = op_grid["operating_hours"]
+    full_load_hours = op_grid["full_load_hours"]
     print(f"  Grid limit: {grid_limit_mw} MW | Operating hours: {operating_hours} h | Full-load hours: {full_load_hours:.1f} h")
 ###
 lcoh_opex_sensitivity = calculate_lcoh_opex_sensitivity(
@@ -1239,7 +2250,8 @@ lcoh_opex_sensitivity = calculate_lcoh_opex_sensitivity(
     pem_opex_scenarios_per_kw_year,
     selected_h2_kg,
     discount_rate,
-    project_lifetime_years
+    project_lifetime_years,
+    selected_opportunity_cost_eur
 )
 
 print("\nLCOH OPEX Sensitivity:")
@@ -1260,6 +2272,19 @@ for opex, lcoh in zip(
 # ===== RESULTS TABLE =====
 results_table["H2 (kg/year)"] = h2_results
 results_table["Utilization (%)"] = utilization_results
+results_table["Lost Export Energy (MWh/year)"] = [
+    simulate_nonhybrid_operation(df, pem_mw, selected_grid_limit_mw)["lost_export_mwh"]
+    for pem_mw in pem_sizes_mw
+]
+results_table["PV Opportunity Cost (€/year)"] = [
+    calculate_2023_pv_opportunity_cost(
+        df,
+        simulate_nonhybrid_operation(
+            df, pem_mw, selected_grid_limit_mw
+        )["lost_export_w"]
+    )[0]
+    for pem_mw in pem_sizes_mw
+]
 print(results_table.to_string(index=False))
 
 ###
@@ -1380,19 +2405,20 @@ net_hydrogen_value_with_opex = (
     hydrogen_revenue_eur
     - annualized_pem_capex
     - annual_opex
+    - selected_opportunity_cost_eur
 )
 
 # LCOH
 simple_lcoh = calculate_simple_lcoh(
     pem_capex_eur,
-    annual_opex,
+    annual_opex + selected_opportunity_cost_eur,
     selected_h2_kg,
     project_lifetime_years
 )
 
 discounted_lcoh = calculate_discounted_lcoh(
     pem_capex_eur,
-    annual_opex,
+    annual_opex + selected_opportunity_cost_eur,
     selected_h2_kg,
     discount_rate,
     project_lifetime_years
@@ -1402,7 +2428,8 @@ discounted_lcoh = calculate_discounted_lcoh(
 lcoh_capex_sensitivity = calculate_lcoh_for_capex_scenarios(
     selected_pem_mw,
     selected_h2_kg,
-    pem_capex_scenarios
+    pem_capex_scenarios,
+    selected_opportunity_cost_eur
 )
 
 discounted_lcoh_capex_sensitivity = (
@@ -1411,7 +2438,8 @@ discounted_lcoh_capex_sensitivity = (
         selected_h2_kg,
         pem_capex_scenarios,
         discount_rate,
-        project_lifetime_years
+        project_lifetime_years,
+        selected_opportunity_cost_eur
     )
 )
 
@@ -1419,7 +2447,8 @@ discounted_lcoh_capex_sensitivity = (
 lcoh_grid_sensitivity = calculate_lcoh_vs_grid_limit(
     df,
     grid_limits_mw,
-    selected_pem_mw
+    selected_pem_mw,
+    pv_export_price_eur_per_mwh
 )
 
 discounted_lcoh_grid_sensitivity = (
@@ -1428,7 +2457,8 @@ discounted_lcoh_grid_sensitivity = (
         grid_limits_mw,
         selected_pem_mw,
         discount_rate,
-        project_lifetime_years
+        project_lifetime_years,
+        pv_export_price_eur_per_mwh
     )
 )
 
@@ -1446,7 +2476,7 @@ discounted_lcoh_grid_sensitivity = (
 #            EU Hydrogen Backbone reports
 #
 # This is NOT calculated from this model.
-# This model only covers curtailment-to-H2 economics.
+# This model now compares non-hybrid PV minimum-load dispatch and hybrid PV-priority dispatch.
 # A dedicated system would require a separate full techno-economic model
 # with matched PEM sizing, grid connection costs, and offtake assumptions.
 benchmark_dedicated_lcoh_low  = 3.5   # €/kg, southern Europe literature
@@ -1458,8 +2488,34 @@ print(f"Hydrogen revenue (€): {hydrogen_revenue_eur:,.0f}")
 print(f"Annualized PEM CAPEX / ACC (€): {annualized_pem_capex:,.0f}  [CRF={crf:.4f}]")
 print(f"Simple net hydrogen value (€): {simple_net_hydrogen_value:,.0f}")
 print(f"Annual OPEX (€): {annual_opex:,.0f}")
-print(f"Net hydrogen value with OPEX (€): {net_hydrogen_value_with_opex:,.0f}")
-print(f"Simple LCOH (€/kg H2): {simple_lcoh:.2f}")
+print("PV export opportunity-cost basis: monthly 2023 EAC RES purchase-price proxy at 11 kV")
+print(
+    "Monthly proxy range (€/MWh): "
+    f"{min(PV_EXPORT_PRICE_2023_EUR_PER_MWH.values()):.2f} - "
+    f"{max(PV_EXPORT_PRICE_2023_EUR_PER_MWH.values()):.2f}"
+)
+print("\nMonthly PV opportunity-cost breakdown:")
+print(
+    selected_monthly_opportunity_cost.to_string(
+        index=False,
+        formatters={
+            "Lost Export Energy (MWh)": lambda x: f"{x:,.2f}",
+            "Opportunity Cost (€)": lambda x: f"{x:,.0f}",
+            "PV Export Price Proxy (€/MWh)": lambda x: f"{x:.2f}",
+        }
+    )
+)
+print(f"Lost export energy due to PEM (MWh/year): {selected_lost_export_mwh:.2f}")
+print(f"PV opportunity cost (€/year): {selected_opportunity_cost_eur:,.0f}")
+assert np.isclose(
+    selected_monthly_opportunity_cost["Opportunity Cost (€)"].sum(),
+    selected_opportunity_cost_eur,
+    rtol=0,
+    atol=1e-6
+), "Monthly opportunity-cost breakdown does not reconcile to annual total."
+
+print(f"Net hydrogen value with OPEX + opportunity cost (€): {net_hydrogen_value_with_opex:,.0f}")
+print(f"Simple LCOH incl. PV opportunity cost (€/kg H2): {simple_lcoh:.2f}")
 
 
 ###
@@ -1493,21 +2549,241 @@ print(f"Dedicated PV-to-H2 LCOH (literature benchmark): {benchmark_dedicated_lco
 # size, rather than assuming a fixed list position.
 selected_index = pem_sizes_mw.index(selected_pem_mw)
 selected_utilization = utilization_results[selected_index]
-print(f"Note: curtailment LCOH reflects low utilization ({selected_utilization:.2f}%), not low electricity cost")
+print(f"Note: the non-hybrid base-case LCOH reflects the selected dispatch and utilization ({selected_utilization:.2f}%).")
 
 # ===== NPV ANALYSIS =====
 # annual_cashflow_for_npv = revenue - opex only.
 # CAPEX is deducted as lump sum at year 0 inside calculate_npv().
 # annualized_pem_capex must NOT appear here.
-annual_cashflow_for_npv = hydrogen_revenue_eur - annual_opex
+annual_cashflow_for_npv = (
+    hydrogen_revenue_eur
+    - annual_opex
+    - selected_opportunity_cost_eur
+)
 
 npv = calculate_npv(pem_capex_eur, annual_cashflow_for_npv, discount_rate, project_lifetime_years)
 print(f"NPV (€): {npv:,.0f}")
 
+# =========================================
+# v1.3 HYBRID OPERATING STRATEGY SENSITIVITY
+# =========================================
+# Reuses pem_capex_eur and annual_opex (fixed, CAPEX-based OPEX) from the
+# base-case economic analysis above. discounted_lcoh and npv (both just
+# computed for the selected non-hybrid base case) serve as the
+# comparison reference. The hybrid 0% grid-baseline case is intentionally
+# different because it follows all available PV up to PEM rated power.
+
+hybrid_summary = hybrid_strategy_sensitivity(
+    df,
+    selected_pem_mw,
+    baseline_load_fractions,
+    electricity_price_scenarios_eur_per_mwh,
+    pem_capex_eur,
+    annual_opex,
+    discount_rate,
+    project_lifetime_years,
+    hydrogen_sale_price,
+    pv_export_price_eur_per_mwh
+)
+
+
+###
+cyprus_2023_benchmark_results = calculate_cyprus_2023_industrial_benchmark(
+    df=df,
+    selected_pem_mw=selected_pem_mw,
+    baseline_load_fractions=baseline_load_fractions,
+    industrial_price_eur_per_mwh=cyprus_2023_industrial_price_eur_per_mwh,
+    pem_capex_eur=pem_capex_eur,
+    fixed_annual_opex_eur=annual_opex,
+    discount_rate=discount_rate,
+    project_lifetime_years=project_lifetime_years,
+    hydrogen_sale_price=hydrogen_sale_price,
+    pv_export_price_eur_per_mwh=pv_export_price_eur_per_mwh
+)
+###
+###
+# ===== v1.3 HYBRID DISPATCH SANITY CHECKS =====
+
+print("\n=== HYBRID DISPATCH SANITY CHECKS ===")
+
+# Check 1: PEM source balance closes for every scenario.
+energy_balance = (
+    hybrid_summary["Total PEM Energy (MWh)"]
+    - hybrid_summary["PV Energy to PEM (MWh)"]
+    - hybrid_summary["Purchased Energy (MWh)"]
+)
+assert np.allclose(energy_balance, 0.0, atol=1e-8), \
+    "FAILED: Hybrid PEM source balance does not close."
+print("PEM source balance: PASS")
+
+# Check 2: Purchased electricity is never negative.
+assert (hybrid_summary["Purchased Energy (MWh)"] >= -1e-9).all(), \
+    "FAILED: Negative grid electricity purchase detected."
+print("Grid-purchase non-negativity: PASS")
+
+# Check 3: A 0% requested grid baseline must buy no grid electricity.
+zero_baseline = hybrid_summary[hybrid_summary["Baseline Load (%)"] == 0]
+assert np.allclose(zero_baseline["Purchased Energy (MWh)"], 0.0, atol=1e-8), \
+    "FAILED: 0% hybrid baseline purchases grid electricity."
+print("0% baseline grid purchase = 0: PASS")
+
+# Check 4: Physical metrics are bounded.
+assert hybrid_summary["Utilization (%)"].between(0, 100 + 1e-8).all(), \
+    "FAILED: Hybrid utilization outside 0-100%."
+assert hybrid_summary["Share PEM Energy from PV (%)"].between(0, 100).all(), \
+    "FAILED: PV share outside 0-100%."
+assert (hybrid_summary["Residual Curtailment (MWh)"] >= -1e-9).all(), \
+    "FAILED: Negative residual curtailment."
+print("Physical bounds: PASS")
+
+# Opportunity-cost accounting: lost export must be non-negative, and only
+# counterfactual export displaced by PEM consumption may be charged.
+assert (hybrid_summary["Lost Export Energy (MWh)"] >= -1e-9).all(), \
+    "FAILED: Negative lost-export energy."
+assert (hybrid_summary["PV Opportunity Cost (€/year)"] >= -1e-9).all(), \
+    "FAILED: Negative PV opportunity cost."
+print("PV opportunity-cost accounting: PASS")
+
+# Check 5: Dispatch physics does not depend on the electricity-price scenario.
+for baseline, group in hybrid_summary.groupby("Baseline Load (%)"):
+    assert np.allclose(group["H2 (kg/year)"], group["H2 (kg/year)"].iloc[0]), \
+        f"FAILED: H2 changes with price at baseline {baseline}%."
+    assert np.allclose(group["Purchased Energy (MWh)"], group["Purchased Energy (MWh)"].iloc[0]), \
+        f"FAILED: Purchased energy changes with price at baseline {baseline}%."
+print("Price-independent physical dispatch: PASS")
+
+# Check 6: PV-priority hybrid at zero grid baseline should use at least as much
+# annual PEM energy as the deliberately conservative non-hybrid strategy.
+assert zero_baseline["Total PEM Energy (MWh)"].iloc[0] + 1e-8 >= accepted_electrical_energy_mwh, \
+    "FAILED: PV-priority hybrid uses less PEM energy than non-hybrid base case."
+print("Hybrid PV-priority dispatch dominates conservative non-hybrid energy use: PASS")
+
+print("ALL HYBRID DISPATCH SANITY CHECKS PASSED")
+###
+
+
+
+###
+
+print("\n=== v1.3 Hybrid Operating Strategy Sensitivity ===")
+print(hybrid_summary.round(2).to_string(index=False))
+
+# ----- Strategy comparison at zero grid baseline -----
+# 0% hybrid baseline is PV-priority PV-only operation. It is intentionally
+# different from the non-hybrid minimum-load + curtailment-ramping base case.
+zero_baseline_rows = hybrid_summary[hybrid_summary["Baseline Load (%)"] == 0.0]
+zero_baseline_h2 = zero_baseline_rows["H2 (kg/year)"].iloc[0]
+zero_baseline_util = zero_baseline_rows["Utilization (%)"].iloc[0]
+
+print(
+    f"\nPV-only hybrid at 0% grid baseline vs non-hybrid base case:\n"
+    f"  Hybrid H2 = {zero_baseline_h2:.2f} kg/year, non-hybrid H2 = {selected_h2_kg:.2f} kg/year\n"
+    f"  Hybrid utilization = {zero_baseline_util:.2f}%, non-hybrid utilization = {selected_utilization:.2f}%"
+)
+
+# ----- Where does hybrid beat the non-hybrid base case? -----
+hybrid_summary["Better than non-hybrid base case?"] = hybrid_summary["LCOH (€/kg H2)"] < discounted_lcoh
+
+print(
+    f"\nHybrid vs non-hybrid reference (discounted LCOH = "
+    f"{discounted_lcoh:.2f} €/kg H2):"
+)
+improved = hybrid_summary[
+    (hybrid_summary["Baseline Load (%)"] > 0) &
+    (hybrid_summary["Better than non-hybrid base case?"])
+].sort_values(["Baseline Load (%)", "Electricity Price (€/MWh)"])
+
+if improved.empty:
+    print(
+        "  No tested (baseline load, electricity price) combination beats "
+        "the non-hybrid base-case LCOH under current assumptions."
+    )
+else:
+    for _, row in improved.iterrows():
+        print(
+            f"  Baseline {row['Baseline Load (%)']:.0f}% + "
+            f"electricity at {row['Electricity Price (€/MWh)']:.0f} €/MWh -> "
+            f"LCOH {row['LCOH (€/kg H2)']:.2f} €/kg H2 "
+            f"(vs {discounted_lcoh:.2f} €/kg H2 reference)"
+        )
+
+###
+
+print("\n=== Cyprus 2023 Industrial Electricity Benchmark ===")
+print(
+    f"Representative electricity purchase price: "
+    f"{cyprus_2023_industrial_price_eur_per_mwh:.0f} €/MWh"
+)
+
+print(
+    cyprus_2023_benchmark_results[
+        [
+            "Baseline Load (%)",
+            "H2 (kg/year)",
+            "Utilization (%)",
+            "PV Energy to PEM (MWh)",
+            "Purchased Energy (MWh)",
+            "Lost Export Energy (MWh)",
+            "PV Opportunity Cost (€/year)",
+            "Electricity Expenditure (€/year)",
+            "LCOH (€/kg H2)",
+            "NPV (€)"
+        ]
+    ].round(2).to_string(index=False)
+)
+###
+cyprus_lcoh_optimum = cyprus_2023_benchmark_results.loc[
+    cyprus_2023_benchmark_results["LCOH (€/kg H2)"].idxmin()
+]
+
+cyprus_npv_optimum = cyprus_2023_benchmark_results.loc[
+    cyprus_2023_benchmark_results["NPV (€)"].idxmax()
+]
+
+print("\nCyprus 2023 benchmark optimum:")
+
+print(
+    f"LCOH-optimal baseline: "
+    f"{cyprus_lcoh_optimum['Baseline Load (%)']:.0f}% | "
+    f"LCOH = {cyprus_lcoh_optimum['LCOH (€/kg H2)']:.2f} €/kg H2 | "
+    f"NPV = €{cyprus_lcoh_optimum['NPV (€)']:,.0f}"
+)
+
+print(
+    f"NPV-optimal baseline: "
+    f"{cyprus_npv_optimum['Baseline Load (%)']:.0f}% | "
+    f"LCOH = {cyprus_npv_optimum['LCOH (€/kg H2)']:.2f} €/kg H2 | "
+    f"NPV = €{cyprus_npv_optimum['NPV (€)']:,.0f}"
+)
+###
+# ===== OPTIMAL BASELINE BY ELECTRICITY PRICE =====
+optimal_baseline_table = calculate_optimal_baseline_by_electricity_price(hybrid_summary)
+
+print("\nOptimal PEM Baseline by Electricity Price:")
+print(
+    optimal_baseline_table.to_string(
+        index=False,
+        formatters={
+            "Price (€/MWh)": lambda x: f"{x:.0f}",
+            "LCOH-optimal baseline (%)": lambda x: f"{x:.0f}",
+            "Minimum LCOH (€/kg H2)": lambda x: f"{x:.2f}",
+            "NPV at LCOH optimum (€)": lambda x: f"{x:,.0f}",
+            "NPV-optimal baseline (%)": lambda x: f"{x:.0f}",
+            "Maximum NPV (€)": lambda x: f"{x:,.0f}",
+            "LCOH at NPV optimum (€/kg H2)": lambda x: f"{x:.2f}",
+        }
+    )
+)
+
+# Cross-check: one optimum row must exist for every tested electricity price.
+assert len(optimal_baseline_table) == len(electricity_price_scenarios_eur_per_mwh), \
+    "FAILED: Optimal-baseline table does not cover every electricity-price scenario."
+
 # ===== HYDROGEN PRICE SENSITIVITY =====
 npv_results = calculate_npv_price_sensitivity(
     hydrogen_price_scenarios, selected_h2_kg,
-    annual_opex, pem_capex_eur, discount_rate, project_lifetime_years)
+    annual_opex, selected_opportunity_cost_eur, pem_capex_eur,
+    discount_rate, project_lifetime_years)
 
 print("\nHydrogen Price Sensitivity:")
 for h2_price, npv_result in zip(hydrogen_price_scenarios, npv_results):
@@ -1517,7 +2793,9 @@ for h2_price, npv_result in zip(hydrogen_price_scenarios, npv_results):
 npv_grid_results = calculate_npv_grid_sensitivity(
     df, grid_limits_mw, selected_pem_mw,
     hydrogen_sale_price, annual_opex, pem_capex_eur,
-    discount_rate, project_lifetime_years)
+    discount_rate, project_lifetime_years,
+    pv_export_price_eur_per_mwh
+)
 
 print("\nNPV Grid Limit Sensitivity:")
 for grid_limit, npv_result in zip(grid_limits_mw, npv_grid_results):
@@ -1532,17 +2810,117 @@ npv_df = calculate_npv_heatmap_data(
     annual_opex,
     pem_capex_eur,
     discount_rate,
-    project_lifetime_years
+    project_lifetime_years,
+    pv_export_price_eur_per_mwh
 )
 print(npv_df.round(0))
+###
+###
+assert (
+    hybrid_summary["Share PEM Energy from PV (%)"]
+    .between(0, 100)
+    .all()
+), "FAILED: Curtailed-energy share outside 0-100%."
 
+###
+###
+
+# =========================================
+# FINAL BASE CASE + SPECIFIC HYBRID DESIGN POINT
+# =========================================
+
+hybrid_design_rows = hybrid_summary[
+    np.isclose(hybrid_summary["Baseline Load (%)"], hybrid_design_baseline_fraction * 100)
+    & np.isclose(
+        hybrid_summary["Electricity Price (€/MWh)"],
+        hybrid_design_electricity_price_eur_per_mwh
+    )
+]
+if hybrid_design_rows.empty:
+    raise ValueError(
+        "Configured hybrid design point is not present in hybrid_summary. "
+        "Add its baseline and electricity price to the sensitivity scenario lists."
+    )
+
+hybrid_design = hybrid_design_rows.iloc[0]
+hybrid_break_even_h2_price = calculate_break_even_hydrogen_price(
+    pem_capex_eur=pem_capex_eur,
+    annual_operating_and_energy_cost_eur=hybrid_design["Total Annual Operating + Energy Cost (€/year)"],
+    annual_h2_kg=hybrid_design["H2 (kg/year)"],
+    discount_rate=discount_rate,
+    project_lifetime_years=project_lifetime_years
+)
+nonhybrid_break_even_h2_price = calculate_break_even_hydrogen_price(
+    pem_capex_eur=pem_capex_eur,
+    annual_operating_and_energy_cost_eur=annual_opex + selected_opportunity_cost_eur,
+    annual_h2_kg=selected_h2_kg,
+    discount_rate=discount_rate,
+    project_lifetime_years=project_lifetime_years
+)
+
+selected_recovery_pct = float(
+    curtailment_recovery_results[pem_sizes_mw.index(selected_pem_mw)]
+)
+full_benchmark_candidates = [
+    p for p in full_curtailment_benchmark_range_mw if p in pem_sizes_mw
+]
+full_benchmark_mw = next(
+    (p for p in full_benchmark_candidates
+     if curtailment_recovery_results[pem_sizes_mw.index(p)] >= 99.0),
+    max(full_benchmark_candidates,
+        key=lambda p: curtailment_recovery_results[pem_sizes_mw.index(p)])
+)
+full_benchmark_recovery_pct = float(
+    curtailment_recovery_results[pem_sizes_mw.index(full_benchmark_mw)]
+)
+
+print("\n" + "=" * 72)
+print("FINAL BASE CASE SUMMARY")
+print("=" * 72)
+print(f"PV plant capacity:                    10.0 MWp")
+print(f"Grid export limit:                    {selected_grid_limit_mw:.1f} MW")
+print(f"Selected PEM capacity:                {selected_pem_mw:.1f} MW")
+print(f"Curtailment recovery:                 {selected_recovery_pct:.1f} %")
+print(f"Full-curtailment benchmark:           {full_benchmark_mw:.1f} MW ({full_benchmark_recovery_pct:.1f} % recovery)")
+print(f"Reference H2 selling price:           {hydrogen_sale_price:.2f} €/kg")
+print(f"H2 price sensitivity:                 {hydrogen_price_scenarios} €/kg")
+print("-")
+print("NON-HYBRID DESIGN")
+print(f"Annual H2 production:                 {selected_h2_kg:,.0f} kg/year")
+print(f"PEM utilization:                      {selected_utilization:.2f} %")
+print(f"Discounted LCOH:                      {discounted_lcoh:.2f} €/kg H2")
+print(f"Break-even H2 price:                  {nonhybrid_break_even_h2_price:.2f} €/kg H2")
+print(f"NPV @ {hydrogen_sale_price:.2f} €/kg H2:                  {npv/1e6:.2f} M€")
+print(f"Economic result:                      {'PROFITABLE' if npv >= 0 else 'NOT PROFITABLE'}")
+print("-")
+print("SPECIFIC HYBRID DESIGN POINT")
+print(f"PEM capacity:                         {selected_pem_mw:.1f} MW")
+print(f"Requested baseline:                   {hybrid_design_baseline_fraction*100:.0f} % ({hybrid_design_baseline_fraction*selected_pem_mw:.2f} MW)")
+print(f"Grid electricity price assumption:    {hybrid_design_electricity_price_eur_per_mwh:.0f} €/MWh")
+print(f"Annual H2 production:                 {hybrid_design['H2 (kg/year)']:,.0f} kg/year")
+print(f"PEM utilization:                      {hybrid_design['Utilization (%)']:.2f} %")
+print(f"PV electricity to PEM:                {hybrid_design['PV Energy to PEM (MWh)']:.1f} MWh/year")
+print(f"Purchased grid electricity:           {hybrid_design['Purchased Energy (MWh)']:.1f} MWh/year")
+print(f"Discounted LCOH:                      {hybrid_design['LCOH (€/kg H2)']:.2f} €/kg H2")
+print(f"Break-even H2 price:                  {hybrid_break_even_h2_price:.2f} €/kg H2")
+print(f"NPV @ {hydrogen_sale_price:.2f} €/kg H2:                  {hybrid_design['NPV (€)']/1e6:.2f} M€")
+print(f"Economic result:                      {'PROFITABLE' if hybrid_design['NPV (€)'] >= 0 else 'NOT PROFITABLE'}")
+print("=" * 72)
 
 # =========================================
 # PLOT EXECUTION
 # =========================================
 
-plot_hourly_pv_output(df)
-plot_two_day_pv_output(df)
+# Figures 1 and 2 removed from the final project figure set.
+# Remove stale files from earlier runs so the figures folder matches the final report.
+for obsolete_figure in (
+    "figure01_hourly_pv_output.png",
+    "figure02_two_day_pv_output.png",
+):
+    obsolete_path = os.path.join(FIGURES_DIR, obsolete_figure)
+    if os.path.exists(obsolete_path):
+        os.remove(obsolete_path)
+
 pem_vs_hydrogen(pem_sizes_results, h2_results)
 pem_vs_utilization(pem_sizes_results, utilization_results)
 
@@ -1558,10 +2936,42 @@ monthly_h2_kg = calculate_monthly_hydrogen(df, selected_pem_mw)
 plot_monthly_hydrogen(monthly_h2_kg)
 
 plot_lcoh_vs_grid_limit(grid_limits_mw, lcoh_grid_sensitivity, discounted_lcoh_grid_sensitivity)
-plot_npv_vs_hydrogen_price(hydrogen_price_scenarios, npv_results)
+#plot_npv_vs_hydrogen_price(hydrogen_price_scenarios, npv_results) #unnecessary, just a straight line
 plot_npv_vs_grid_limit(grid_limits_mw, npv_grid_results)
 plot_npv_heatmap(npv_df)
-plot_minimum_load_sensitivity(pem_sizes_mw, min_load_sensitivity_results)
+# Minimum-load sensitivity plot removed from the main figure set.
+# The 5%, 10%, 15% and 20% curves are nearly coincident over the relevant
+# PEM-size range, so the figure adds little information. The sensitivity
+# calculation is retained in the model for validation / tabular reporting.
+# plot_minimum_load_sensitivity(pem_sizes_mw, min_load_sensitivity_results)
+
+# ----- v1.3 Hybrid Operating Strategy plots -----
+#plot_h2_vs_baseline_load(hybrid_summary)  #unnecessary, just a straight line
+#plot_utilization_vs_baseline_load(hybrid_summary)  #unnecessary, just a straight line
+#plot_purchased_electricity_vs_baseline_load(hybrid_summary) #unnecessary ignore
+plot_lcoh_vs_baseline_load_multi_price(hybrid_summary, reference_lcoh=discounted_lcoh)
+plot_npv_vs_baseline_load_multi_price(hybrid_summary, reference_npv=npv)
+plot_hybrid_strategy_heatmap(
+    hybrid_summary, baseline_load_fractions, electricity_price_scenarios_eur_per_mwh,
+    reference_lcoh=discounted_lcoh
+)
+
+# ----- Representative-day dispatch visualizations -----
+selected_dispatch_plot_date = resolve_dispatch_plot_date(
+    df, selected_grid_limit_mw, dispatch_plot_date
+)
+print(f"Representative dispatch day: {selected_dispatch_plot_date}")
+
+plot_daily_dispatch(
+    df, selected_pem_mw, selected_grid_limit_mw, selected_dispatch_plot_date,
+    hybrid_baseline_fraction=dispatch_plot_hybrid_baseline_fraction,
+    strategy="nonhybrid"
+)
+plot_daily_dispatch(
+    df, selected_pem_mw, selected_grid_limit_mw, selected_dispatch_plot_date,
+    hybrid_baseline_fraction=dispatch_plot_hybrid_baseline_fraction,
+    strategy="hybrid"
+)
 
 
 # =========================================
@@ -1569,8 +2979,8 @@ plot_minimum_load_sensitivity(pem_sizes_mw, min_load_sensitivity_results)
 # =========================================
 
 print(
-    "Hydrogen production reaches a maximum at approximately 2.5 MW PEM "
-    "within the investigated sizing range."
+    f"Hydrogen production reaches a maximum of {max_h2_kg_year / 1000:.2f} tonnes/year "
+    f"at approximately {max_h2_pem_mw:.2f} MW PEM within the investigated sizing range."
 )
 
 print(
@@ -1578,9 +2988,9 @@ print(
 )
 
 print(
-    "Smaller PEM systems achieve higher utilization and lower simplified "
-    "annualized LCOH, but recover a substantially smaller fraction of the "
-    "available curtailed energy."
+    "Smaller PEM systems can achieve higher utilization and lower simplified "
+    "annualized LCOH, while larger systems can absorb more PV and reduce residual "
+    "curtailment. The optimum therefore depends on the chosen objective."
 )
 
 print(
@@ -1603,53 +3013,32 @@ print(
 # specific electricity consumption curve.
 #
 # Current limitations:
-# - partial-load curve is simplified and literature-based
+# - partial-load SEC curve is simplified and literature-based
 # - no stack degradation
 # - no stack replacement
 # - no hydrogen compression
 # - no hydrogen storage
-# - no real Cyprus electricity market prices
-# - no dynamic dispatch based on MCP / DAM prices
+# - no Balance-of-Plant electricity consumption
+# - no historical hourly Cyprus electricity-price series
+# - Cyprus 2023 electricity cost is represented by a static
+#   MV/HV industrial benchmark rather than a time-resolved tariff
+# - no dynamic price-responsive dispatch
+# - PV export opportunity cost is represented using a monthly 2023
+#   EAC RES purchase-price proxy rather than an hourly merchant-market price
 #
-# Therefore, this is a first-order techno-economic model,
-# not a full engineering design or investment-grade feasibility study.
+# Therefore, this is a first-order techno-economic screening model,
+# not an investment-grade feasibility study.
 
 
 # =========================================
 # KEY FINDINGS
 # =========================================
+# Key numerical findings are printed dynamically above because the dispatch
+# redesign changes annual H2 production, utilization, LCOH and NPV. Do not
+# hard-code old v1.2 values here; use the current run output and saved figures.
 
-# 10 MWp PV plant, Cyprus
-# Selected case: 1 MW PEM | 6 MW grid export limit
-
-# Annual H2 production, selected case: 14.62 tonnes/year
-# Maximum H2 production among tested PEM sizes:
-# approximately 17.94 tonnes/year at 2 MW PEM
-
-# PEM utilization, selected case: 8.91%
-# Operating hours: 1,044 h/year
-# Equivalent full-load hours: 780.8 h/year
-
-# Simple LCOH: 6.61 €/kg H2
-# Discounted LCOH: 10.04 €/kg H2
-
-# NPV @ 6 €/kg H2: -505,996 €
-
-# Break-even H2 sale price:
-# approximately 10.04 €/kg under the current assumptions
-
-# Battery round-trip energy retention: 90.0%
-# Hydrogen conversion energy retention, LHV: 62.4%
-# Hydrogen exergy efficiency: 61.0%
-
-
-# Hydrogen production peaks near 2 MW PEM under the selected
-# curtailment profile. Further PEM oversizing reduces annual H2
-# production primarily because the 15% minimum-load threshold
-# increases in absolute power terms, causing more curtailed-power
-# hours to fall below the electrolyzer operating range.
-
-# Hydrogen-from-curtailment is technically feasible but
-# not economically viable under the selected base-case assumptions.
+# The non-hybrid and hybrid dispatch strategies are screening cases.
+# Their economic viability depends strongly on the value assigned to PV diverted
+# from export, grid-purchase price, hydrogen sale price, and omitted BoP costs.
 #
 # /// END ///
