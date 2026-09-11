@@ -24,7 +24,7 @@
 #Both strategies use PEM electrolysis and preserve an explicit hourly power balance.
 
 #The model combines:
-#- PVGIS hourly production data
+#- PVGIS 2023 hourly production data and PVsyst TMY hourly AC output
 #- Grid export constraints
 #- Curtailment estimation
 #- PEM electrolyzer sizing
@@ -42,7 +42,9 @@
 #          Electricity-price sensitivity is applied only to purchased grid energy.
 #          Otherwise-exportable PV diverted to PEM carries a month-specific 2023
 #          opportunity cost; curtailed PV carries zero opportunity cost.
-#   v1.4 (planned) - electrolyzer technology sensitivity
+#   v1.4 - PVsyst integration and PVGIS-vs-PVsyst validation
+#          Adds a selectable PV data source, detailed PVsyst hourly AC output,
+#          source-comparison metrics/figures, and preserves the v1.3 PEM/economic model.
 
 
 # =========================================
@@ -63,8 +65,22 @@ os.makedirs(FIGURES_DIR, exist_ok=True)
 # CONFIGURATION & ASSUMPTIONS
 # =========================================
 
-#PVGIS
-filename = os.path.join(BASE_DIR, "Timeseries_35.141_33.415_SA3_10000kWp_crystSi_14_28deg_0deg_2023_2023.csv")
+# PV data sources
+PVGIS_FILENAME = os.path.join(
+    BASE_DIR,
+    "Timeseries_35.141_33.415_SA3_10000kWp_crystSi_14_28deg_0deg_2023_2023.csv"
+)
+PVSYST_FILENAME = os.path.join(
+    BASE_DIR,
+    "PV_Hydrogen_Cyprus_10MWp_Project_VC0_HourlyRes_0.CSV"
+)
+
+# v1.4 default: use PVsyst as the active production profile for the full
+# downstream PEM/curtailment/economic analysis. Set the environment variable
+# PV_DATA_SOURCE=PVGIS to reproduce the v1.3 PV source with the same code.
+PV_DATA_SOURCE = os.getenv("PV_DATA_SOURCE", "PVSYST").strip().upper()
+if PV_DATA_SOURCE not in {"PVGIS", "PVSYST"}:
+    raise ValueError("PV_DATA_SOURCE must be either 'PVGIS' or 'PVSYST'.")
 #
 #kwh_per_kg_h2 = 52
 water_liters_per_kg_h2 = 9
@@ -137,7 +153,7 @@ discount_rate = 0.08
 # v1.3 CONFIGURATION: HYBRID OPERATING STRATEGY SENSITIVITY
 # =========================================
 #
-# Roadmap: v1.2 (PEM sizing + minimum load) -> v1.3 (operating strategy) -> v1.4 (electrolyzer technology)
+# Roadmap: v1.2 (PEM sizing + minimum load) -> v1.3 (operating strategy) -> v1.4 (PVsyst integration / PV-source validation)
 #
 # v1.3 tests a HYBRID PV-priority strategy. Available PV is offered to the
 # PEM first. Grid electricity only fills a deficit required to reach the
@@ -186,26 +202,106 @@ hybrid_design_baseline_fraction = 0.20
 hybrid_design_electricity_price_eur_per_mwh = cyprus_2023_industrial_price_eur_per_mwh
 
 # Selected design points for reporting / plots
-selected_pem_mw = 1.5
+legacy_selected_pem_mw = 1.5
+selected_pem_mw = legacy_selected_pem_mw
 full_curtailment_benchmark_range_mw = (2.0, 2.5)
+
+# v1.4 multi-objective PEM sizing configuration.
+# The final recommendation is not a universal optimum: it is the equal-weight
+# normalized ideal-point compromise across curtailment recovery (maximize),
+# discounted LCOH (minimize), and NPV at the reference H2 price (maximize).
+MULTIOBJECTIVE_PEM_MIN_MW = 0.10
+MULTIOBJECTIVE_PEM_MAX_MW = 3.00
+MULTIOBJECTIVE_PEM_STEP_MW = 0.01
+MULTIOBJECTIVE_WEIGHTS = {
+    "recovery": 1.0 / 3.0,
+    "lcoh": 1.0 / 3.0,
+    "npv": 1.0 / 3.0,
+}
+FULL_RECOVERY_THRESHOLD_PCT = 99.9
 
 # =========================================
 # DATA LOADING FUNCTIONS
 # =========================================
 
 def load_pvgis_data(filename):
+    """Load the original PVGIS 2023 hourly PV output. PVGIS P is in watts."""
     df = pd.read_csv(filename, skiprows=10)
     df["P"] = pd.to_numeric(df["P"], errors="coerce")
-    df = df.dropna(subset=["P"])
+    df = df.dropna(subset=["P"]).copy()
     df["time"] = pd.to_datetime(df["time"], format="%Y%m%d:%H%M")
     df["month"] = df["time"].dt.month
-    return df
+    df["source"] = "PVGIS 2023 (SARAH3)"
+
+    if len(df) != 8760:
+        raise ValueError(f"PVGIS dataset should contain 8760 hourly rows; found {len(df)}.")
+    if (df["P"] < -1e-9).any():
+        raise ValueError("Negative PVGIS PV power detected.")
+
+    return df.reset_index(drop=True)
+
+
+def load_pvsyst_data(filename, calendar_year=2023):
+    """
+    Load PVsyst hourly ASCII/CSV output and convert E_Grid from kW to W.
+
+    PVsyst TMY uses a generic calendar year (1990 in the exported file). For
+    downstream monthly 2023 opportunity-cost accounting, the month/day/hour are
+    mapped onto calendar year 2023. This does NOT turn the TMY into 2023 weather;
+    it only provides a consistent non-leap calendar index.
+
+    Small negative night-time E_Grid values represent inverter/system night
+    consumption. They are retained in P_raw_w for audit, while the PV production
+    signal P is clipped at zero before entering PV-to-H2 dispatch.
+    """
+    df = pd.read_csv(filename, skiprows=10, encoding="utf-8-sig")
+    df.columns = [str(c).strip() for c in df.columns]
+
+    required = {"date", "E_Grid"}
+    missing = required.difference(df.columns)
+    if missing:
+        raise ValueError(f"PVsyst CSV missing required columns: {sorted(missing)}")
+
+    # The second row after the header contains units; coercion removes it cleanly.
+    df["E_Grid"] = pd.to_numeric(df["E_Grid"], errors="coerce")
+    df = df.dropna(subset=["E_Grid"]).copy()
+    parsed = pd.to_datetime(df["date"].astype(str).str.strip(), format="%d/%m/%y %H:%M")
+    df["time"] = parsed.map(lambda x: x.replace(year=calendar_year))
+
+    # Preserve all exported diagnostic variables as numeric where present.
+    for col in ["GlobInc", "GlobEff", "EArray", "PR", "GlobHor", "T_Amb", "TArray"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df["P_raw_w"] = df["E_Grid"].to_numpy(dtype=float) * 1000.0
+    df["P"] = np.maximum(df["P_raw_w"].to_numpy(dtype=float), 0.0)
+    df["month"] = df["time"].dt.month
+    df["source"] = "PVsyst TMY 5.3"
+
+    if len(df) != 8760:
+        raise ValueError(f"PVsyst dataset should contain 8760 hourly rows; found {len(df)}.")
+    if df["P"].isna().any():
+        raise ValueError("NaN values detected in PVsyst PV production after parsing.")
+
+    return df.reset_index(drop=True)
+
+
+def load_pv_sources():
+    """Load and validate both v1.4 PV production sources."""
+    if not os.path.exists(PVGIS_FILENAME):
+        raise FileNotFoundError(f"PVGIS input not found: {PVGIS_FILENAME}")
+    if not os.path.exists(PVSYST_FILENAME):
+        raise FileNotFoundError(f"PVsyst input not found: {PVSYST_FILENAME}")
+
+    pvgis_df = load_pvgis_data(PVGIS_FILENAME)
+    pvsyst_df = load_pvsyst_data(PVSYST_FILENAME)
+    return pvgis_df, pvsyst_df
 
 
 def calculate_2023_pv_opportunity_cost(df, lost_export_w):
     """
     Calculate annual PV-export opportunity cost using the actual month
-    of each hourly PVGIS timestep and the 2023 EAC 11-kV RES purchase-price
+    of each hourly PV timestep and the 2023 EAC 11-kV RES purchase-price
     proxy.
 
     Opportunity cost is applied ONLY to otherwise-exportable PV displaced
@@ -214,7 +310,7 @@ def calculate_2023_pv_opportunity_cost(df, lost_export_w):
     lost_export_w = np.asarray(lost_export_w, dtype=float)
 
     assert len(lost_export_w) == len(df), \
-        "Lost-export series length does not match PVGIS dataframe."
+        "Lost-export series length does not match PV dataframe."
     assert np.all(lost_export_w >= -1e-9), \
         "Negative lost-export power detected."
 
@@ -226,7 +322,7 @@ def calculate_2023_pv_opportunity_cost(df, lost_export_w):
     assert not np.isnan(price_eur_per_mwh).any(), \
         "Missing 2023 monthly PV export opportunity-cost price."
 
-    # PVGIS input is hourly. W x 1 h / 1e6 = MWh.
+    # PV input is hourly. W x 1 h / 1e6 = MWh.
     hourly_lost_export_mwh = lost_export_w / 1_000_000.0
     hourly_cost_eur = hourly_lost_export_mwh * price_eur_per_mwh
 
@@ -1184,6 +1280,190 @@ def calculate_weighted_exergy_efficiency(pem_input_w, pem_size_w):
 #
 
 # =========================================
+# MULTI-OBJECTIVE PEM SIZING FUNCTIONS
+# =========================================
+
+def build_multiobjective_pem_sizing(
+    df,
+    grid_limit_mw,
+    pem_min_mw=MULTIOBJECTIVE_PEM_MIN_MW,
+    pem_max_mw=MULTIOBJECTIVE_PEM_MAX_MW,
+    pem_step_mw=MULTIOBJECTIVE_PEM_STEP_MW,
+    weights=MULTIOBJECTIVE_WEIGHTS,
+):
+    """
+    Fine-grid PEM sizing across three competing objectives:
+      - maximize gross-curtailment recovery,
+      - minimize discounted LCOH,
+      - maximize NPV at the reference H2 selling price.
+
+    The Pareto frontier is identified without assigning weights. A single
+    'balanced compromise' is then selected transparently using equal-weight
+    normalized distance to the ideal point. Changing weights changes this
+    recommendation, so it must not be interpreted as a unique physical optimum.
+    """
+    sizes = np.round(
+        np.arange(pem_min_mw, pem_max_mw + pem_step_mw / 2, pem_step_mw), 2
+    )
+    gross_curt_w = np.maximum(
+        df["P"].to_numpy(dtype=float) - grid_limit_mw * 1e6, 0.0
+    )
+    gross_curt_mwh = gross_curt_w.sum() / 1e6
+    af = sum(1.0 / ((1.0 + discount_rate) ** y) for y in range(1, project_lifetime_years + 1))
+
+    rows = []
+    for pem_mw in sizes:
+        op = simulate_nonhybrid_operation(df, float(pem_mw), grid_limit_mw)
+        recovered_mwh = max(gross_curt_mwh - op["residual_curtailment_w"].sum() / 1e6, 0.0)
+        recovery_pct = 100.0 * recovered_mwh / gross_curt_mwh if gross_curt_mwh > 0 else 0.0
+
+        capex = float(pem_mw) * 1000.0 * pem_capex_per_kw
+        fixed_opex = capex * pem_opex_fraction
+        opportunity_cost, _ = calculate_2023_pv_opportunity_cost(df, op["lost_export_w"])
+        annual_cost = fixed_opex + opportunity_cost
+        lcoh = calculate_discounted_lcoh(
+            capex, annual_cost, op["annual_h2_kg"], discount_rate, project_lifetime_years
+        )
+        annual_cashflow = op["annual_h2_kg"] * hydrogen_sale_price - annual_cost
+        npv_value = -capex + annual_cashflow * af
+
+        rows.append({
+            "PEM Size (MW)": float(pem_mw),
+            "Curtailment Recovery (%)": recovery_pct,
+            "Residual Curtailment (MWh/year)": op["residual_curtailment_w"].sum() / 1e6,
+            "H2 (kg/year)": op["annual_h2_kg"],
+            "Utilization (%)": op["utilization_pct"],
+            "Discounted LCOH (EUR/kg H2)": lcoh,
+            "NPV (EUR)": npv_value,
+            "PV Opportunity Cost (EUR/year)": opportunity_cost,
+        })
+
+    table = pd.DataFrame(rows)
+
+    # Pareto efficiency: a point is dominated only if another point is at least
+    # as good in all three objectives and strictly better in at least one.
+    rec = table["Curtailment Recovery (%)"].to_numpy()
+    lcoh = table["Discounted LCOH (EUR/kg H2)"].to_numpy()
+    npv_values = table["NPV (EUR)"].to_numpy()
+    pareto = np.ones(len(table), dtype=bool)
+    for i in range(len(table)):
+        dominates_i = (
+            (rec >= rec[i] - 1e-12)
+            & (lcoh <= lcoh[i] + 1e-12)
+            & (npv_values >= npv_values[i] - 1e-9)
+            & (
+                (rec > rec[i] + 1e-12)
+                | (lcoh < lcoh[i] - 1e-12)
+                | (npv_values > npv_values[i] + 1e-9)
+            )
+        )
+        dominates_i[i] = False
+        if dominates_i.any():
+            pareto[i] = False
+    table["Pareto Efficient"] = pareto
+
+    # Normalize each objective to [0, 1], where 1 is the ideal direction.
+    def benefit_normalize(values):
+        values = np.asarray(values, dtype=float)
+        span = values.max() - values.min()
+        return np.ones_like(values) if span <= 0 else (values - values.min()) / span
+
+    def cost_normalize(values):
+        values = np.asarray(values, dtype=float)
+        span = values.max() - values.min()
+        return np.ones_like(values) if span <= 0 else (values.max() - values) / span
+
+    rec_score = benefit_normalize(rec)
+    lcoh_score = cost_normalize(lcoh)
+    npv_score = benefit_normalize(npv_values)
+
+    w_rec = float(weights["recovery"])
+    w_lcoh = float(weights["lcoh"])
+    w_npv = float(weights["npv"])
+    w_sum = w_rec + w_lcoh + w_npv
+    w_rec, w_lcoh, w_npv = w_rec / w_sum, w_lcoh / w_sum, w_npv / w_sum
+
+    distance = np.sqrt(
+        w_rec * (1.0 - rec_score) ** 2
+        + w_lcoh * (1.0 - lcoh_score) ** 2
+        + w_npv * (1.0 - npv_score) ** 2
+    )
+    table["Ideal-Point Distance"] = distance
+
+    # Select from the Pareto frontier only.
+    pareto_table = table.loc[table["Pareto Efficient"]].copy()
+    recommended_idx = pareto_table["Ideal-Point Distance"].idxmin()
+    recommended = table.loc[recommended_idx].copy()
+
+    full_recovery_rows = table[
+        table["Curtailment Recovery (%)"] >= FULL_RECOVERY_THRESHOLD_PCT
+    ]
+    full_recovery = (
+        full_recovery_rows.iloc[0].copy() if not full_recovery_rows.empty else table.iloc[-1].copy()
+    )
+
+    return table, pareto_table, recommended, full_recovery
+
+
+def plot_multiobjective_pem_sizing(multiobjective_table, recommended):
+    """Recovery-LCOH trade-off with NPV encoded by marker colour."""
+    fig_number, fig_title = next_fig("Multi-Objective PEM Sizing: Recovery vs LCOH vs NPV")
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    sc = ax.scatter(
+        multiobjective_table["Curtailment Recovery (%)"],
+        multiobjective_table["Discounted LCOH (EUR/kg H2)"],
+        c=multiobjective_table["NPV (EUR)"] / 1e6,
+        s=24,
+        alpha=0.65,
+    )
+
+    pareto = multiobjective_table[multiobjective_table["Pareto Efficient"]].sort_values(
+        "Curtailment Recovery (%)"
+    )
+    ax.plot(
+        pareto["Curtailment Recovery (%)"],
+        pareto["Discounted LCOH (EUR/kg H2)"],
+        linewidth=1.5,
+        label="Pareto frontier",
+    )
+
+    ax.scatter(
+        [recommended["Curtailment Recovery (%)"]],
+        [recommended["Discounted LCOH (EUR/kg H2)"]],
+        s=130,
+        marker="*",
+        zorder=5,
+        label="Balanced compromise",
+    )
+    ax.annotate(
+        f"{recommended['PEM Size (MW)']:.2f} MW\n"
+        f"Recovery {recommended['Curtailment Recovery (%)']:.1f}%\n"
+        f"LCOH {recommended['Discounted LCOH (EUR/kg H2)']:.2f} €/kg\n"
+        f"NPV {recommended['NPV (EUR)']/1e6:.2f} M€",
+        xy=(recommended["Curtailment Recovery (%)"], recommended["Discounted LCOH (EUR/kg H2)"]),
+        xytext=(12, 18), textcoords="offset points",
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85),
+        arrowprops=dict(arrowstyle="->"),
+        fontsize=9,
+    )
+
+    cbar = fig.colorbar(sc, ax=ax)
+    cbar.set_label("NPV (M€)")
+    ax.set_xlabel("Curtailment Recovery (%)")
+    ax.set_ylabel("Discounted LCOH (€/kg H2)")
+    ax.set_title(fig_title)
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(
+        os.path.join(FIGURES_DIR, f"figure{fig_number:02d}_multiobjective_pem_sizing.png"),
+        dpi=300, bbox_inches="tight"
+    )
+    plt.show()
+
+
+# =========================================
 # PLOTTING FUNCTIONS
 # =========================================
 
@@ -1341,8 +1621,15 @@ def plot_annualized_lcoh_vs_pem_size(results_table):
 
 
 ###
-def plot_curtailment_recovery_vs_pem_size(pem_sizes_mw, curtailment_recovery_results):
-    """Plot recovery curve and explicitly mark the two engineering design points."""
+def plot_curtailment_recovery_vs_pem_size(
+    pem_sizes_mw,
+    curtailment_recovery_results,
+    selected_design_mw=None,
+    selected_design_recovery=None,
+    full_recovery_mw=None,
+    full_recovery_pct=None,
+):
+    """Plot recovery curve and mark the selected and fine-sweep recovery points."""
     fig_number, fig_title = next_fig("Curtailment Recovery vs PEM Size")
     fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -1350,29 +1637,27 @@ def plot_curtailment_recovery_vs_pem_size(pem_sizes_mw, curtailment_recovery_res
     y = np.asarray(curtailment_recovery_results, dtype=float)
     ax.plot(x, y, marker="o", linewidth=1.8, label="Curtailment recovery")
 
-    # Design point 1: curtailment-oriented design point, fixed at 1.5 MW.
-    recovery_15 = float(np.interp(1.5, x, y))
-    ax.scatter([1.5], [recovery_15], s=90, zorder=5)
-    ax.annotate(
-        f"Curtailment-oriented design\n1.5 MW, {recovery_15:.1f}% recovery",
-        xy=(1.5, recovery_15), xytext=(1.85, max(recovery_15 - 12, 5)),
-        arrowprops=dict(arrowstyle="->"), fontsize=9,
-        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85)
-    )
+    if selected_design_mw is not None and selected_design_recovery is not None:
+        ax.scatter([selected_design_mw], [selected_design_recovery], s=90, zorder=5)
+        ax.annotate(
+            f"Multi-objective design\n{selected_design_mw:.2f} MW, "
+            f"{selected_design_recovery:.1f}% recovery",
+            xy=(selected_design_mw, selected_design_recovery),
+            xytext=(selected_design_mw + 0.35, max(selected_design_recovery - 14, 5)),
+            arrowprops=dict(arrowstyle="->"), fontsize=9,
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85)
+        )
 
-    # Design point 2: smallest tested PEM size in the 2.0-2.5 MW benchmark
-    # range that reaches >=99% recovery. If neither does, show the better one.
-    candidates = [v for v in full_curtailment_benchmark_range_mw if v in x]
-    candidate_pairs = [(v, float(y[np.where(x == v)[0][0]])) for v in candidates]
-    qualifying = [(v, r) for v, r in candidate_pairs if r >= 99.0]
-    benchmark_mw, benchmark_recovery = (qualifying[0] if qualifying else max(candidate_pairs, key=lambda z: z[1]))
-    ax.scatter([benchmark_mw], [benchmark_recovery], s=90, zorder=5)
-    ax.annotate(
-        f"Full-curtailment benchmark\n{benchmark_mw:.1f} MW, {benchmark_recovery:.1f}% recovery",
-        xy=(benchmark_mw, benchmark_recovery), xytext=(benchmark_mw + 0.85, max(benchmark_recovery - 22, 5)),
-        arrowprops=dict(arrowstyle="->"), fontsize=9,
-        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85)
-    )
+    if full_recovery_mw is not None and full_recovery_pct is not None:
+        ax.scatter([full_recovery_mw], [full_recovery_pct], s=90, zorder=5)
+        ax.annotate(
+            f"First fine-sweep size reaching ≥{FULL_RECOVERY_THRESHOLD_PCT:.1f}%\n"
+            f"{full_recovery_mw:.2f} MW, {full_recovery_pct:.1f}% recovery",
+            xy=(full_recovery_mw, full_recovery_pct),
+            xytext=(full_recovery_mw + 0.55, max(full_recovery_pct - 22, 5)),
+            arrowprops=dict(arrowstyle="->"), fontsize=9,
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85)
+        )
 
     ax.axhline(95, linestyle="--", linewidth=1.0, alpha=0.65, label="95% recovery")
     ax.axhline(99, linestyle=":", linewidth=1.0, alpha=0.65, label="99% recovery")
@@ -1665,14 +1950,14 @@ def plot_npv_vs_baseline_load_multi_price(hybrid_summary, reference_npv=None):
             label=f"{price} €/MWh"
         )
 
-    plt.axhline(y=0, linestyle=":", color="gray")
+    plt.axhline(y=0, linestyle=":", color="gray", label="NPV = 0")
 
     if reference_npv is not None:
         plt.axhline(
             y=reference_npv / 1_000_000,
             linestyle="--",
             color="black",
-            label=f"non-hybrid base case ({reference_npv/1_000_000:.2f} M€)"
+            label=f"Non-hybrid NPV = {reference_npv/1_000_000:+.2f} M€"
         )
 
     plt.xlabel("Baseline Load (% of PEM capacity)")
@@ -1786,7 +2071,7 @@ def plot_daily_dispatch(df, selected_pem_mw, selected_grid_limit_mw, date_string
     day_mask = df["time"].dt.strftime("%Y-%m-%d") == date_string
     day_df = df.loc[day_mask].copy()
     if day_df.empty:
-        raise ValueError(f"No PVGIS records found for {date_string}.")
+        raise ValueError(f"No PV records found for {date_string}.")
 
     if strategy == "hybrid":
         op = simulate_hybrid_operation(
@@ -2062,12 +2347,129 @@ def calculate_optimal_baseline_by_electricity_price(hybrid_summary):
 
     return pd.DataFrame(records)
 
+
+def build_pv_source_comparison(pvgis_df, pvsyst_df, grid_limit_mw, pem_size_mw):
+    """
+    Compare PVGIS and PVsyst with the SAME downstream non-hybrid PEM model.
+
+    This is a model-source comparison, not an hour-by-hour weather validation:
+    PVGIS is calendar-year 2023 while the PVsyst profile is based on PVGIS TMY 5.3.
+    """
+    records = []
+    for label, source_df in [("PVGIS 2023", pvgis_df), ("PVsyst TMY 5.3", pvsyst_df)]:
+        annual_pv_mwh = source_df["P"].sum() / 1e6
+        gross_curt_w = np.maximum(source_df["P"].to_numpy(dtype=float) - grid_limit_mw * 1e6, 0.0)
+        gross_curt_mwh = gross_curt_w.sum() / 1e6
+
+        op = simulate_nonhybrid_operation(source_df, pem_size_mw, grid_limit_mw)
+        recovered_mwh = max(gross_curt_mwh - op["residual_curtailment_w"].sum() / 1e6, 0.0)
+        recovery_pct = recovered_mwh / gross_curt_mwh * 100 if gross_curt_mwh > 0 else 0.0
+
+        pem_capex_eur = pem_size_mw * 1000 * pem_capex_per_kw
+        annual_fixed_opex_eur = pem_capex_eur * pem_opex_fraction
+        opportunity_cost_eur, _ = calculate_2023_pv_opportunity_cost(
+            source_df, op["lost_export_w"]
+        )
+        lcoh = calculate_discounted_lcoh(
+            pem_capex_eur,
+            annual_fixed_opex_eur + opportunity_cost_eur,
+            op["annual_h2_kg"],
+            discount_rate,
+            project_lifetime_years,
+        )
+        annual_revenue_eur = op["annual_h2_kg"] * hydrogen_sale_price
+        npv = calculate_npv(
+            pem_capex_eur,
+            annual_revenue_eur - annual_fixed_opex_eur - opportunity_cost_eur,
+            discount_rate,
+            project_lifetime_years,
+        )
+
+        records.append({
+            "PV Source": label,
+            "Annual PV Energy (MWh)": annual_pv_mwh,
+            "PV Capacity Factor (%)": annual_pv_mwh / (10 * 8760) * 100,
+            "Gross Curtailment @ 6 MW (MWh)": gross_curt_mwh,
+            "Curtailment Recovery (%)": recovery_pct,
+            "H2 (kg/year)": op["annual_h2_kg"],
+            "PEM Utilization (%)": op["utilization_pct"],
+            "Lost Export (MWh)": op["lost_export_mwh"],
+            "PV Opportunity Cost (EUR/year)": opportunity_cost_eur,
+            "Discounted LCOH (EUR/kg H2)": lcoh,
+            "NPV @ reference H2 price (EUR)": npv,
+        })
+
+    return pd.DataFrame(records)
+
+
+def plot_pv_source_monthly_comparison(pvgis_df, pvsyst_df):
+    fig_number, fig_title = next_fig("Monthly PV Energy: PVGIS 2023 vs PVsyst TMY 5.3")
+    monthly_pvgis = pvgis_df.groupby("month")["P"].sum() / 1e6
+    monthly_pvsyst = pvsyst_df.groupby("month")["P"].sum() / 1e6
+    months = np.arange(1, 13)
+
+    plt.figure(figsize=(10, 5.5))
+    plt.plot(months, monthly_pvgis.reindex(months), marker="o", label="PVGIS 2023")
+    plt.plot(months, monthly_pvsyst.reindex(months), marker="o", label="PVsyst TMY 5.3")
+    plt.xlabel("Month")
+    plt.ylabel("PV Energy (MWh/month)")
+    plt.title(fig_title)
+    plt.xticks(months)
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(
+        os.path.join(FIGURES_DIR, f"figure{fig_number:02d}_pvgis_vs_pvsyst_monthly_energy.png"),
+        dpi=300, bbox_inches="tight"
+    )
+    plt.show()
+
+
+def plot_pv_source_power_duration(pvgis_df, pvsyst_df):
+    fig_number, fig_title = next_fig("PV Power Duration: PVGIS 2023 vs PVsyst TMY 5.3")
+    pvgis_mw = np.sort(pvgis_df["P"].to_numpy(dtype=float) / 1e6)[::-1]
+    pvsyst_mw = np.sort(pvsyst_df["P"].to_numpy(dtype=float) / 1e6)[::-1]
+    exceedance = np.arange(1, len(pvgis_mw) + 1) / len(pvgis_mw) * 100
+
+    plt.figure(figsize=(10, 5.5))
+    plt.plot(exceedance, pvgis_mw, label="PVGIS 2023")
+    plt.plot(exceedance, pvsyst_mw, label="PVsyst TMY 5.3")
+    plt.axhline(selected_grid_limit_mw, linestyle="--", linewidth=1.2, label=f"Grid export limit ({selected_grid_limit_mw:.0f} MW)")
+    plt.xlabel("Hours exceeded (% of year)")
+    plt.ylabel("PV AC Power (MW)")
+    plt.title(fig_title)
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(
+        os.path.join(FIGURES_DIR, f"figure{fig_number:02d}_pvgis_vs_pvsyst_power_duration.png"),
+        dpi=300, bbox_inches="tight"
+    )
+    plt.show()
+
+
 #
 # =========================================
 # MAIN EXECUTION
 # =========================================
 
-df = load_pvgis_data(filename)
+pvgis_df, pvsyst_df = load_pv_sources()
+pv_source_frames = {"PVGIS": pvgis_df, "PVSYST": pvsyst_df}
+df = pv_source_frames[PV_DATA_SOURCE].copy()
+
+print("=" * 72)
+print("PV DATA SOURCE")
+print(f"Active source: {PV_DATA_SOURCE}")
+print("PVGIS source: calendar-year 2023 / PVGIS-SARAH3")
+print("PVsyst source: PVGIS TMY 5.3 / detailed PVsyst system simulation")
+print("NOTE: PVGIS-vs-PVsyst is a source/model comparison, not same-weather validation.")
+if PV_DATA_SOURCE == "PVSYST":
+    pvsyst_net_mwh = pvsyst_df["P_raw_w"].sum() / 1e6
+    pvsyst_dispatch_mwh = pvsyst_df["P"].sum() / 1e6
+    print(f"PVsyst raw net E_Grid: {pvsyst_net_mwh:.3f} MWh/year")
+    print(f"PVsyst non-negative PV dispatch input: {pvsyst_dispatch_mwh:.3f} MWh/year")
+    print(f"Night-consumption clipping adjustment: {pvsyst_dispatch_mwh - pvsyst_net_mwh:.3f} MWh/year")
+print("=" * 72)
 
 # ===== PV SYSTEM ANALYSIS =====
 annual_energy_mwh, capacity_factor = calculate_pv_metrics(df)
@@ -2089,42 +2491,58 @@ utilization_results = []
 # ====== GRID LIMIT & CURTAILMENT SETUP =====
 selected_grid_limit_mw = 6
 
-# Select PEM size automatically by MINIMUM opportunity-cost-adjusted LCOH
-# under the non-hybrid strategy and base-case CAPEX assumption.
-pem_sizing_lcoh_with_opportunity = []
-for candidate_pem_mw in pem_sizes_mw:
-    candidate_op = simulate_nonhybrid_operation(
-        df, candidate_pem_mw, selected_grid_limit_mw
-    )
-    candidate_capex_eur = candidate_pem_mw * 1000 * pem_capex_per_kw
-    candidate_fixed_opex_eur = candidate_capex_eur * pem_opex_fraction
-    candidate_opportunity_cost_eur, _ = calculate_2023_pv_opportunity_cost(
-        df, candidate_op["lost_export_w"]
-    )
-    candidate_lcoh = calculate_discounted_lcoh(
-        candidate_capex_eur,
-        candidate_fixed_opex_eur + candidate_opportunity_cost_eur,
-        candidate_op["annual_h2_kg"],
-        discount_rate,
-        project_lifetime_years
-    )
-    pem_sizing_lcoh_with_opportunity.append(candidate_lcoh)
+# v1.4 fine-grid, three-objective PEM sizing.
+multiobjective_table, pareto_table, multiobjective_recommended, full_recovery_point = (
+    build_multiobjective_pem_sizing(df, selected_grid_limit_mw)
+)
+multiobjective_table.to_csv(
+    os.path.join(BASE_DIR, "multiobjective_pem_sizing.csv"), index=False
+)
+pareto_table.to_csv(
+    os.path.join(BASE_DIR, "pareto_pem_sizing.csv"), index=False
+)
 
-# Engineering design selection: keep the curtailment-oriented design fixed at 1.5 MW.
-# The purely economic minimum is still calculated above and reported as a diagnostic,
-# but it no longer overrides the selected design point.
-economic_optimum_index = int(np.nanargmin(pem_sizing_lcoh_with_opportunity))
-economic_optimum_pem_mw = float(pem_sizes_mw[economic_optimum_index])
-selected_pem_mw = 1.5
-selected_pem_index = pem_sizes_mw.index(selected_pem_mw)
+selected_pem_mw = float(multiobjective_recommended["PEM Size (MW)"])
+selected_pem_recovery_pct = float(multiobjective_recommended["Curtailment Recovery (%)"])
+full_recovery_mw_fine = float(full_recovery_point["PEM Size (MW)"])
+full_recovery_pct_fine = float(full_recovery_point["Curtailment Recovery (%)"])
 
+# Single-objective diagnostics are retained to show why a multi-objective decision is needed.
+economic_lcoh_row = multiobjective_table.loc[
+    multiobjective_table["Discounted LCOH (EUR/kg H2)"].idxmin()
+]
+npv_optimum_row = multiobjective_table.loc[multiobjective_table["NPV (EUR)"].idxmax()]
+
+print("\n=== v1.4 MULTI-OBJECTIVE PEM SIZING ===")
 print(
-    f"Selected curtailment-oriented PEM design: {selected_pem_mw:.2f} MW"
+    f"Balanced compromise: {selected_pem_mw:.2f} MW | "
+    f"Recovery {selected_pem_recovery_pct:.1f}% | "
+    f"LCOH {multiobjective_recommended['Discounted LCOH (EUR/kg H2)']:.2f} €/kg | "
+    f"NPV {multiobjective_recommended['NPV (EUR)']/1e6:.2f} M€"
 )
 print(
-    f"Economic minimum-LCOH diagnostic: {economic_optimum_pem_mw:.2f} MW "
-    f"({pem_sizing_lcoh_with_opportunity[economic_optimum_index]:.2f} €/kg H2)"
+    f"Minimum-LCOH point: {economic_lcoh_row['PEM Size (MW)']:.2f} MW | "
+    f"{economic_lcoh_row['Discounted LCOH (EUR/kg H2)']:.2f} €/kg"
 )
+print(
+    f"Maximum-NPV point: {npv_optimum_row['PEM Size (MW)']:.2f} MW | "
+    f"{npv_optimum_row['NPV (EUR)']/1e6:.2f} M€"
+)
+print(
+    f"First fine-sweep size at ≥{FULL_RECOVERY_THRESHOLD_PCT:.1f}% recovery: "
+    f"{full_recovery_mw_fine:.2f} MW"
+)
+print(f"Pareto-efficient candidates: {len(pareto_table)} of {len(multiobjective_table)}")
+
+# Source comparison now uses the multi-objective-selected PEM size.
+pv_source_comparison = build_pv_source_comparison(
+    pvgis_df, pvsyst_df, selected_grid_limit_mw, selected_pem_mw
+)
+pv_source_comparison.to_csv(
+    os.path.join(BASE_DIR, "pv_source_comparison_summary.csv"), index=False
+)
+print("\nPVGIS vs PVsyst reference comparison:")
+print(pv_source_comparison.to_string(index=False, float_format=lambda x: f"{x:,.2f}"))
 
 df["curtailed_power_w"], selected_curtailed_mwh = calculate_hourly_curtailment(df, selected_grid_limit_mw)
 selected_nonhybrid_op = simulate_nonhybrid_operation(
@@ -2163,7 +2581,7 @@ selected_water_m3 = (
 )
 
 print(f"\n--- SELECTED BASE CASE ---")
-print(f"PEM Size: {selected_pem_mw} MW (curtailment-oriented design point)")
+print(f"PEM Size: {selected_pem_mw:.2f} MW (multi-objective balanced compromise)")
 print(f"Grid Export Limit: {selected_grid_limit_mw} MW")
 print(f"Curtailed PV Energy: {selected_curtailed_mwh:.1f} MWh/year")
 print(f"Hydrogen Production: {selected_h2_kg:.0f} kg/year")
@@ -2544,11 +2962,9 @@ for grid_limit, lcoh_s, lcoh_d in zip(grid_limits_mw, lcoh_grid_sensitivity, dis
 
 print(f"Dedicated PV-to-H2 LCOH (literature benchmark): {benchmark_dedicated_lcoh_low:.1f} - {benchmark_dedicated_lcoh_high:.1f} €/kg H2")
 
-# utilization_results is indexed by pem_sizes_mw order, not by MW value.
-# Look up the entry that actually corresponds to the selected base-case PEM
-# size, rather than assuming a fixed list position.
-selected_index = pem_sizes_mw.index(selected_pem_mw)
-selected_utilization = utilization_results[selected_index]
+# Selected design may lie between the coarse plotting sizes, so use the
+# directly simulated utilization instead of indexing pem_sizes_mw.
+selected_utilization = selected_nonhybrid_op["utilization_pct"]
 print(f"Note: the non-hybrid base-case LCOH reflects the selected dispatch and utilization ({selected_utilization:.2f}%).")
 
 # ===== NPV ANALYSIS =====
@@ -2858,21 +3274,9 @@ nonhybrid_break_even_h2_price = calculate_break_even_hydrogen_price(
     project_lifetime_years=project_lifetime_years
 )
 
-selected_recovery_pct = float(
-    curtailment_recovery_results[pem_sizes_mw.index(selected_pem_mw)]
-)
-full_benchmark_candidates = [
-    p for p in full_curtailment_benchmark_range_mw if p in pem_sizes_mw
-]
-full_benchmark_mw = next(
-    (p for p in full_benchmark_candidates
-     if curtailment_recovery_results[pem_sizes_mw.index(p)] >= 99.0),
-    max(full_benchmark_candidates,
-        key=lambda p: curtailment_recovery_results[pem_sizes_mw.index(p)])
-)
-full_benchmark_recovery_pct = float(
-    curtailment_recovery_results[pem_sizes_mw.index(full_benchmark_mw)]
-)
+selected_recovery_pct = selected_pem_recovery_pct
+full_benchmark_mw = full_recovery_mw_fine
+full_benchmark_recovery_pct = full_recovery_pct_fine
 
 print("\n" + "=" * 72)
 print("FINAL BASE CASE SUMMARY")
@@ -2881,7 +3285,7 @@ print(f"PV plant capacity:                    10.0 MWp")
 print(f"Grid export limit:                    {selected_grid_limit_mw:.1f} MW")
 print(f"Selected PEM capacity:                {selected_pem_mw:.1f} MW")
 print(f"Curtailment recovery:                 {selected_recovery_pct:.1f} %")
-print(f"Full-curtailment benchmark:           {full_benchmark_mw:.1f} MW ({full_benchmark_recovery_pct:.1f} % recovery)")
+print(f"First size at ≥99.9% recovery:         {full_benchmark_mw:.2f} MW ({full_benchmark_recovery_pct:.1f} % recovery)")
 print(f"Reference H2 selling price:           {hydrogen_sale_price:.2f} €/kg")
 print(f"H2 price sensitivity:                 {hydrogen_price_scenarios} €/kg")
 print("-")
@@ -2911,22 +3315,29 @@ print("=" * 72)
 # PLOT EXECUTION
 # =========================================
 
-# Figures 1 and 2 removed from the final project figure set.
-# Remove stale files from earlier runs so the figures folder matches the final report.
-for obsolete_figure in (
-    "figure01_hourly_pv_output.png",
-    "figure02_two_day_pv_output.png",
-):
-    obsolete_path = os.path.join(FIGURES_DIR, obsolete_figure)
-    if os.path.exists(obsolete_path):
-        os.remove(obsolete_path)
+# Remove stale PNGs from earlier runs so numbering and content match this run.
+for filename_in_figures in os.listdir(FIGURES_DIR):
+    if filename_in_figures.lower().endswith(".png"):
+        os.remove(os.path.join(FIGURES_DIR, filename_in_figures))
+
+# v1.4 PV-source validation figures. These are intentionally distribution/monthly
+# comparisons because PVGIS is 2023 while PVsyst uses a TMY weather profile.
+plot_pv_source_monthly_comparison(pvgis_df, pvsyst_df)
+plot_pv_source_power_duration(pvgis_df, pvsyst_df)
 
 pem_vs_hydrogen(pem_sizes_results, h2_results)
 pem_vs_utilization(pem_sizes_results, utilization_results)
 
 plot_annualized_lcoh_vs_pem_size(results_table)
 
-plot_curtailment_recovery_vs_pem_size(pem_sizes_mw, curtailment_recovery_results)
+plot_multiobjective_pem_sizing(multiobjective_table, multiobjective_recommended)
+plot_curtailment_recovery_vs_pem_size(
+    pem_sizes_mw, curtailment_recovery_results,
+    selected_design_mw=selected_pem_mw,
+    selected_design_recovery=selected_pem_recovery_pct,
+    full_recovery_mw=full_recovery_mw_fine,
+    full_recovery_pct=full_recovery_pct_fine,
+)
 plot_curtailment_diagnostics(curtailment_diagnostics)
 
 capex_cols = ["PEM Size (MW)"] + [col for col in results_table.columns if "CAPEX" in col]
@@ -3013,6 +3424,10 @@ print(
 # specific electricity consumption curve.
 #
 # Current limitations:
+# - PVGIS uses calendar-year 2023 weather, while the PVsyst reference profile uses
+#   PVGIS TMY 5.3; therefore their comparison is not same-weather model validation
+# - PVsyst reference case currently excludes near-shading, soiling, ageing,
+#   unavailability, auxiliary loads, and explicit MV/HV transformer losses
 # - partial-load SEC curve is simplified and literature-based
 # - no stack degradation
 # - no stack replacement
