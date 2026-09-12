@@ -479,6 +479,44 @@ results/tables/
 
 ---
 
+## Scientific basis and data sources
+
+The model distinguishes between **measured/software-generated input data**, **literature-based assumptions**, and **author-defined scenario assumptions**. This distinction is maintained to improve transparency and reproducibility.
+
+| Model element | Basis / source |
+|---|---|
+| Hourly PV generation — actual 2023 weather | European Commission **PVGIS** hourly time-series data |
+| Hourly PV generation — TMY system simulation | **PVsyst 8**, using PVGIS TMY 5.3 meteorological data and the system configuration documented in the repository |
+| PEM partial-load gross SEC | Literature-based approximation informed by experimental PEM-electrolyser performance reported by **Crespi et al. (2023)** |
+| Hydrogen LHV and water stoichiometry | Standard thermodynamic / electrochemical relations |
+| PEM CAPEX and OPEX scenarios | Literature / European hydrogen-sector benchmarks and explicit scenario assumptions |
+| Grid-export limits | Author-defined sensitivity scenarios representing different levels of grid constraint |
+| PV export opportunity cost | Historical 2023 Cyprus RES purchase-price proxy used as an economic modelling assumption |
+| Hybrid grid-electricity prices | Scenario sweep; 270 EUR/MWh retained as a representative 2023 industrial-price benchmark rather than a Day-Ahead Market price |
+| Multi-objective weighting | Author-defined equal-weight normalised-distance criterion used only to select a representative balanced-compromise point |
+
+Numerical assumptions that are not direct observations are therefore treated as **model inputs or scenarios rather than measured facts**. Sensitivity analysis is used where these assumptions can materially affect the conclusions.
+
+### Key scientific reference for PEM part-load behaviour
+
+Crespi, E., et al. (2023). *Experimental and theoretical evaluation of a 60 kW PEM electrolysis system for flexible dynamic operation*. **Energy Conversion and Management, 277**, 116622. https://doi.org/10.1016/j.enconman.2022.116622
+
+The current Python implementation uses a simplified gross-SEC curve derived as an engineering approximation from published PEM part-load behaviour; it does **not** claim to reproduce the complete experimental system or its balance-of-plant performance.
+
+### Planned EES electrochemical validation
+
+A physics-based PEM model in **Engineering Equation Solver (EES)** is planned as the next validation layer. The EES model will independently calculate reversible/Nernst voltage, activation losses, ohmic losses, concentration losses, Faradaic hydrogen production, stack efficiency and heat generation. After calibration against peer-reviewed experimental data, an EES-derived PEM performance map will be compared with the current empirical SEC representation and subsequently integrated into the hourly Python simulation.
+
+The intended modelling chain is:
+
+```text
+PVGIS / PVsyst -> Python hourly dispatch -> EES-validated PEM performance -> annual H2 -> sizing -> LCOH / NPV
+```
+
+This extension is intended to strengthen the connection between system-level techno-economic modelling and underlying PEM thermodynamics/electrochemistry.
+
+---
+
 ## Model validation and sanity checks
 
 The code performs internal consistency checks including:
@@ -502,7 +540,7 @@ This is a **first-order techno-economic screening model**, not an investment-gra
 
 Current limitations include:
 
-- simplified literature-based PEM partial-load SEC curve
+- simplified literature-based PEM partial-load SEC curve (physics-based EES validation planned)
 - no PEM stack degradation
 - no stack replacement schedule
 - no hydrogen compression model
@@ -579,6 +617,7 @@ dispatch and techno-economic optimisation.
 - **Matplotlib**
 - **PVGIS**
 - **PVsyst 8**
+- **Engineering Equation Solver (EES)** — planned electrochemical validation layer
 
 ---
 
