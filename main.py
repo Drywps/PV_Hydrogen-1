@@ -45,7 +45,14 @@
 #   v1.4 - PVsyst integration and PVGIS-vs-PVsyst validation
 #          Adds a selectable PV data source, detailed PVsyst hourly AC output,
 #          source-comparison metrics/figures, and preserves the v1.3 PEM/economic model.
-
+#   v1.5 - MW-scale PEM system SEC update
+#          Replaces the earlier Crespi-based gross SEC curve with the 1.25 MW
+#          system-level SEC curve reported by Tran et al. (2026), Table 6.
+#          The 15% SEC point is retained as an explicit linear extrapolation
+#          from the 25%-35% Tran data; minimum PEM load remains 15%.
+#          Restores v1.4-style results/figures and results/tables output structure
+#          and reintroduces multi-objective fine PEM sizing / Pareto exports.
+#          Final reporting reference is the optimized balanced design: 1.55 MW.
 
 # =========================================
 # IMPORTS
@@ -57,8 +64,11 @@ import matplotlib.pyplot as plt
 #
 import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FIGURES_DIR = os.path.join(BASE_DIR, "figures")
+RESULTS_DIR = os.path.join(BASE_DIR, "results")
+FIGURES_DIR = os.path.join(RESULTS_DIR, "figures")
+TABLES_DIR = os.path.join(RESULTS_DIR, "tables")
 os.makedirs(FIGURES_DIR, exist_ok=True)
+os.makedirs(TABLES_DIR, exist_ok=True)
 #
 
 # =========================================
@@ -68,11 +78,14 @@ os.makedirs(FIGURES_DIR, exist_ok=True)
 # PV data sources
 PVGIS_FILENAME = os.path.join(
     BASE_DIR,
-    "Timeseries_35.141_33.415_SA3_10000kWp_crystSi_14_28deg_0deg_2023_2023.csv"
+    "data",
+    "PVGIS_2023.csv"
 )
+
 PVSYST_FILENAME = os.path.join(
     BASE_DIR,
-    "PV_Hydrogen_Cyprus_10MWp_Project_VC0_HourlyRes_0.CSV"
+    "data",
+    "PVsyst_TMY_5.3.csv"
 )
 
 # v1.4 default: use PVsyst as the active production profile for the full
@@ -202,23 +215,8 @@ hybrid_design_baseline_fraction = 0.20
 hybrid_design_electricity_price_eur_per_mwh = cyprus_2023_industrial_price_eur_per_mwh
 
 # Selected design points for reporting / plots
-legacy_selected_pem_mw = 1.5
-selected_pem_mw = legacy_selected_pem_mw
+selected_pem_mw = 1.55
 full_curtailment_benchmark_range_mw = (2.0, 2.5)
-
-# v1.4 multi-objective PEM sizing configuration.
-# The final recommendation is not a universal optimum: it is the equal-weight
-# normalized ideal-point compromise across curtailment recovery (maximize),
-# discounted LCOH (minimize), and NPV at the reference H2 price (maximize).
-MULTIOBJECTIVE_PEM_MIN_MW = 0.10
-MULTIOBJECTIVE_PEM_MAX_MW = 3.00
-MULTIOBJECTIVE_PEM_STEP_MW = 0.01
-MULTIOBJECTIVE_WEIGHTS = {
-    "recovery": 1.0 / 3.0,
-    "lcoh": 1.0 / 3.0,
-    "npv": 1.0 / 3.0,
-}
-FULL_RECOVERY_THRESHOLD_PCT = 99.9
 
 # =========================================
 # DATA LOADING FUNCTIONS
@@ -1115,51 +1113,70 @@ EX_H2_KWH_PER_KG = 32.56  # kWh/kg, standard chemical exergy of H2(g) (Szargut e
 # PEM PART-LOAD PERFORMANCE
 # =========================================
 
+# Base-case minimum operating load retained from Project 1.1-1.4.
 MIN_PEM_LOAD_FRACTION = 0.15
 
-# Set of minimum-load fractions tested in the sensitivity study
-# (minimum_load_sensitivity / plot_minimum_load_sensitivity).
-# 0.15 is included so the sensitivity study can be directly compared
-# against the base-case value used everywhere else in the model.
+# Existing minimum-load sensitivity settings are retained for backward
+# compatibility with earlier project outputs; they are not used to define
+# the v1.5 base-case SEC curve.
 MIN_LOAD_SENSITIVITY = (0.05, 0.10, 0.15, 0.20)
 
-# Representative gross PEM specific-consumption curve
-# estimated from experimental data in:
-# Crespi et al. (2023), Fig. 7(c).
+# MW-scale PEM SYSTEM specific electricity consumption curve.
+#
+# Source for 25%-100%:
+# Tran et al. (2026), "Hydrogen production system scaling using a
+# high-fidelity simulation-optimization framework",
+# Energy Conversion and Management 357, 121416, Table 6.
 #
 # IMPORTANT:
-# These values represent gross electrolyzer/stack performance,
-# not full-system consumption including all Balance-of-Plant loads.
+# - These are SYSTEM-level SEC values, including modeled Balance-of-Plant
+#   energy consumption.
+# - The published Tran data cover 25%-100% load.
+# - The 15% point (47.9 kWh/kg) is NOT a published Tran value.
+#   It is an explicit linear extrapolation from the published
+#   25% = 48.9 and 35% = 49.9 kWh/kg points.
+# - Therefore the 15% point is a modelling assumption and should be reported
+#   as extrapolated rather than experimentally validated.
+#
+# Linear extrapolation:
+# SEC_15 = 48.9 - (49.9 - 48.9) / (0.35 - 0.25) * (0.25 - 0.15)
+#        = 47.9 kWh/kg H2
 
-CRESPI_LOAD_FRACTIONS = np.array([
+TRAN_SYSTEM_LOAD_FRACTIONS = np.array([
     0.15,
     0.25,
-    0.40,
-    0.60,
-    0.80,
+    0.35,
+    0.50,
+    0.65,
+    0.75,
+    0.85,
     1.00
 ])
 
-CRESPI_GROSS_SEC_KWH_PER_KG = np.array([
-    46.0,
-    46.5,
-    48.0,
-    50.5,
-    53.0,
-    55.5
+TRAN_SYSTEM_SEC_KWH_PER_KG = np.array([
+    47.9,  # extrapolated modelling assumption
+    48.9,  # Tran et al. (2026), Table 6
+    49.9,
+    51.2,
+    52.2,
+    52.9,
+    53.4,
+    54.0
 ])
 
 
 def pem_specific_consumption(load_fraction):
     """
-    Return gross PEM specific electricity consumption [kWh/kg H2]
+    Return PEM system specific electricity consumption [kWh/kg H2]
     as a function of electrolyzer load fraction.
 
-    The empirical curve is used only within the approximately
-    15-100% operating range represented by Crespi et al. (2023).
+    Published system-level points from Tran et al. (2026) are used from
+    25% to 100% load. The 15% point is an explicitly labelled linear
+    extrapolation used to preserve the Project 1.1-1.4 base-case
+    minimum-load assumption.
 
-    Values below 15% load are returned as NaN because the PEM
-    is assumed not to operate below the empirical minimum-load range.
+    Values below 15% load are returned as NaN because the PEM is assumed
+    not to operate below the base-case minimum load.
     """
 
     load_fraction = np.asarray(load_fraction, dtype=float)
@@ -1170,8 +1187,8 @@ def pem_specific_consumption(load_fraction):
 
     sec[active] = np.interp(
         np.clip(load_fraction[active], MIN_PEM_LOAD_FRACTION, 1.0),
-        CRESPI_LOAD_FRACTIONS,
-        CRESPI_GROSS_SEC_KWH_PER_KG
+        TRAN_SYSTEM_LOAD_FRACTIONS,
+        TRAN_SYSTEM_SEC_KWH_PER_KG
     )
 
     return sec
@@ -1279,186 +1296,212 @@ def calculate_weighted_exergy_efficiency(pem_input_w, pem_size_w):
     )
 #
 
+
 # =========================================
-# MULTI-OBJECTIVE PEM SIZING FUNCTIONS
+# v1.5 MULTI-OBJECTIVE PEM SIZING
 # =========================================
 
-def build_multiobjective_pem_sizing(
+def build_multiobjective_pem_sizing_table(
     df,
     grid_limit_mw,
-    pem_min_mw=MULTIOBJECTIVE_PEM_MIN_MW,
-    pem_max_mw=MULTIOBJECTIVE_PEM_MAX_MW,
-    pem_step_mw=MULTIOBJECTIVE_PEM_STEP_MW,
-    weights=MULTIOBJECTIVE_WEIGHTS,
+    capex_per_kw,
+    hydrogen_price_eur_per_kg,
+    discount_rate,
+    project_lifetime_years,
+    start_mw=0.10,
+    stop_mw=3.00,
+    step_mw=0.01
 ):
     """
-    Fine-grid PEM sizing across three competing objectives:
-      - maximize gross-curtailment recovery,
-      - minimize discounted LCOH,
-      - maximize NPV at the reference H2 selling price.
+    Fine PEM-size sweep using the current v1.5 dispatch and Tran-based
+    system SEC curve.
 
-    The Pareto frontier is identified without assigning weights. A single
-    'balanced compromise' is then selected transparently using equal-weight
-    normalized distance to the ideal point. Changing weights changes this
-    recommendation, so it must not be interpreted as a unique physical optimum.
+    Objectives:
+      - maximize curtailment recovery
+      - minimize discounted LCOH
+      - maximize NPV at the reference H2 price
     """
-    sizes = np.round(
-        np.arange(pem_min_mw, pem_max_mw + pem_step_mw / 2, pem_step_mw), 2
-    )
+    sizes = np.round(np.arange(start_mw, stop_mw + step_mw / 2, step_mw), 2)
+
     gross_curt_w = np.maximum(
-        df["P"].to_numpy(dtype=float) - grid_limit_mw * 1e6, 0.0
+        df["P"].to_numpy(dtype=float) - grid_limit_mw * 1e6,
+        0.0
     )
     gross_curt_mwh = gross_curt_w.sum() / 1e6
-    af = sum(1.0 / ((1.0 + discount_rate) ** y) for y in range(1, project_lifetime_years + 1))
 
-    rows = []
+    records = []
+
     for pem_mw in sizes:
-        op = simulate_nonhybrid_operation(df, float(pem_mw), grid_limit_mw)
-        recovered_mwh = max(gross_curt_mwh - op["residual_curtailment_w"].sum() / 1e6, 0.0)
-        recovery_pct = 100.0 * recovered_mwh / gross_curt_mwh if gross_curt_mwh > 0 else 0.0
+        op = simulate_nonhybrid_operation(df, pem_mw, grid_limit_mw)
 
-        capex = float(pem_mw) * 1000.0 * pem_capex_per_kw
-        fixed_opex = capex * pem_opex_fraction
-        opportunity_cost, _ = calculate_2023_pv_opportunity_cost(df, op["lost_export_w"])
-        annual_cost = fixed_opex + opportunity_cost
-        lcoh = calculate_discounted_lcoh(
-            capex, annual_cost, op["annual_h2_kg"], discount_rate, project_lifetime_years
+        pem_capex_eur = pem_mw * 1000 * capex_per_kw
+        annual_opex_eur = pem_capex_eur * pem_opex_fraction
+        opportunity_cost_eur, _ = calculate_2023_pv_opportunity_cost(
+            df, op["lost_export_w"]
         )
-        annual_cashflow = op["annual_h2_kg"] * hydrogen_sale_price - annual_cost
-        npv_value = -capex + annual_cashflow * af
 
-        rows.append({
-            "PEM Size (MW)": float(pem_mw),
+        annual_h2_kg = op["annual_h2_kg"]
+        residual_curt_mwh = op["residual_curtailment_w"].sum() / 1e6
+        avoided_curt_mwh = max(gross_curt_mwh - residual_curt_mwh, 0.0)
+
+        recovery_pct = (
+            avoided_curt_mwh / gross_curt_mwh * 100
+            if gross_curt_mwh > 0 else 0.0
+        )
+
+        discounted_lcoh = calculate_discounted_lcoh(
+            pem_capex_eur,
+            annual_opex_eur + opportunity_cost_eur,
+            annual_h2_kg,
+            discount_rate,
+            project_lifetime_years
+        )
+
+        annual_revenue_eur = annual_h2_kg * hydrogen_price_eur_per_kg
+        annual_cashflow_eur = (
+            annual_revenue_eur
+            - annual_opex_eur
+            - opportunity_cost_eur
+        )
+
+        npv_eur = calculate_npv(
+            pem_capex_eur,
+            annual_cashflow_eur,
+            discount_rate,
+            project_lifetime_years
+        )
+
+        records.append({
+            "PEM Size (MW)": pem_mw,
             "Curtailment Recovery (%)": recovery_pct,
-            "Residual Curtailment (MWh/year)": op["residual_curtailment_w"].sum() / 1e6,
-            "H2 (kg/year)": op["annual_h2_kg"],
+            "Discounted LCOH (EUR/kg H2)": discounted_lcoh,
+            "NPV (EUR)": npv_eur,
+            "H2 (kg/year)": annual_h2_kg,
             "Utilization (%)": op["utilization_pct"],
-            "Discounted LCOH (EUR/kg H2)": lcoh,
-            "NPV (EUR)": npv_value,
-            "PV Opportunity Cost (EUR/year)": opportunity_cost,
+            "Avoided Curtailment (MWh)": avoided_curt_mwh,
+            "Residual Curtailment (MWh)": residual_curt_mwh,
+            "Lost Export Energy (MWh)": op["lost_export_mwh"],
+            "PV Opportunity Cost (EUR/year)": opportunity_cost_eur
         })
 
-    table = pd.DataFrame(rows)
+    table = pd.DataFrame(records)
 
-    # Pareto efficiency: a point is dominated only if another point is at least
-    # as good in all three objectives and strictly better in at least one.
-    rec = table["Curtailment Recovery (%)"].to_numpy()
-    lcoh = table["Discounted LCOH (EUR/kg H2)"].to_numpy()
-    npv_values = table["NPV (EUR)"].to_numpy()
-    pareto = np.ones(len(table), dtype=bool)
+    # Pareto-efficient candidates for:
+    # maximize recovery, minimize LCOH, maximize NPV.
+    vals = table[
+        ["Curtailment Recovery (%)",
+         "Discounted LCOH (EUR/kg H2)",
+         "NPV (EUR)"]
+    ].to_numpy(dtype=float)
+
+    pareto_mask = np.ones(len(table), dtype=bool)
+
     for i in range(len(table)):
+        if not pareto_mask[i]:
+            continue
+
+        ri, li, ni = vals[i]
+
         dominates_i = (
-            (rec >= rec[i] - 1e-12)
-            & (lcoh <= lcoh[i] + 1e-12)
-            & (npv_values >= npv_values[i] - 1e-9)
-            & (
-                (rec > rec[i] + 1e-12)
-                | (lcoh < lcoh[i] - 1e-12)
-                | (npv_values > npv_values[i] + 1e-9)
+            (vals[:, 0] >= ri) &
+            (vals[:, 1] <= li) &
+            (vals[:, 2] >= ni) &
+            (
+                (vals[:, 0] > ri) |
+                (vals[:, 1] < li) |
+                (vals[:, 2] > ni)
             )
         )
-        dominates_i[i] = False
+
         if dominates_i.any():
-            pareto[i] = False
-    table["Pareto Efficient"] = pareto
+            pareto_mask[i] = False
 
-    # Normalize each objective to [0, 1], where 1 is the ideal direction.
-    def benefit_normalize(values):
-        values = np.asarray(values, dtype=float)
-        span = values.max() - values.min()
-        return np.ones_like(values) if span <= 0 else (values - values.min()) / span
+    table["Pareto Efficient"] = pareto_mask
 
-    def cost_normalize(values):
-        values = np.asarray(values, dtype=float)
-        span = values.max() - values.min()
-        return np.ones_like(values) if span <= 0 else (values.max() - values) / span
+    # Equal-weight normalized distance to ideal point.
+    def norm01(series, higher_is_better=True):
+        s = np.asarray(series, dtype=float)
+        span = s.max() - s.min()
+        if span <= 0:
+            return np.ones_like(s)
+        z = (s - s.min()) / span
+        return z if higher_is_better else 1.0 - z
 
-    rec_score = benefit_normalize(rec)
-    lcoh_score = cost_normalize(lcoh)
-    npv_score = benefit_normalize(npv_values)
-
-    w_rec = float(weights["recovery"])
-    w_lcoh = float(weights["lcoh"])
-    w_npv = float(weights["npv"])
-    w_sum = w_rec + w_lcoh + w_npv
-    w_rec, w_lcoh, w_npv = w_rec / w_sum, w_lcoh / w_sum, w_npv / w_sum
+    recovery_score = norm01(table["Curtailment Recovery (%)"], True)
+    lcoh_score = norm01(table["Discounted LCOH (EUR/kg H2)"], False)
+    npv_score = norm01(table["NPV (EUR)"], True)
 
     distance = np.sqrt(
-        w_rec * (1.0 - rec_score) ** 2
-        + w_lcoh * (1.0 - lcoh_score) ** 2
-        + w_npv * (1.0 - npv_score) ** 2
-    )
-    table["Ideal-Point Distance"] = distance
-
-    # Select from the Pareto frontier only.
-    pareto_table = table.loc[table["Pareto Efficient"]].copy()
-    recommended_idx = pareto_table["Ideal-Point Distance"].idxmin()
-    recommended = table.loc[recommended_idx].copy()
-
-    full_recovery_rows = table[
-        table["Curtailment Recovery (%)"] >= FULL_RECOVERY_THRESHOLD_PCT
-    ]
-    full_recovery = (
-        full_recovery_rows.iloc[0].copy() if not full_recovery_rows.empty else table.iloc[-1].copy()
+        ((1.0 - recovery_score) ** 2
+         + (1.0 - lcoh_score) ** 2
+         + (1.0 - npv_score) ** 2) / 3.0
     )
 
-    return table, pareto_table, recommended, full_recovery
+    table["Balanced Distance to Ideal"] = distance
+    table["Balanced Compromise"] = False
+
+    balanced_idx = int(np.argmin(distance))
+    table.loc[balanced_idx, "Balanced Compromise"] = True
+
+    return table
 
 
-def plot_multiobjective_pem_sizing(multiobjective_table, recommended):
-    """Recovery-LCOH trade-off with NPV encoded by marker colour."""
-    fig_number, fig_title = next_fig("Multi-Objective PEM Sizing: Recovery vs LCOH vs NPV")
-    fig, ax = plt.subplots(figsize=(10, 6))
+def summarize_multiobjective_sizing(table):
+    balanced = table.loc[table["Balanced Compromise"]].iloc[0]
+    min_lcoh = table.loc[table["Discounted LCOH (EUR/kg H2)"].idxmin()]
+    max_npv = table.loc[table["NPV (EUR)"].idxmax()]
 
-    sc = ax.scatter(
-        multiobjective_table["Curtailment Recovery (%)"],
-        multiobjective_table["Discounted LCOH (EUR/kg H2)"],
-        c=multiobjective_table["NPV (EUR)"] / 1e6,
-        s=24,
-        alpha=0.65,
+    reached = table[table["Curtailment Recovery (%)"] >= 99.9]
+    first_999 = reached.iloc[0] if not reached.empty else None
+
+    return balanced, min_lcoh, max_npv, first_999
+
+
+def plot_multiobjective_pem_sizing(table):
+    fig_number, fig_title = next_fig("Multi-Objective PEM Sizing")
+
+    fig, ax1 = plt.subplots(figsize=(10, 6))
+
+    ax1.plot(
+        table["PEM Size (MW)"],
+        table["Curtailment Recovery (%)"],
+        label="Curtailment recovery (%)"
     )
+    ax1.set_xlabel("PEM Size (MW)")
+    ax1.set_ylabel("Curtailment Recovery (%)")
+    ax1.grid(True)
 
-    pareto = multiobjective_table[multiobjective_table["Pareto Efficient"]].sort_values(
-        "Curtailment Recovery (%)"
+    ax2 = ax1.twinx()
+    ax2.plot(
+        table["PEM Size (MW)"],
+        table["Discounted LCOH (EUR/kg H2)"],
+        label="Discounted LCOH (€/kg H2)",
+        linestyle="--"
     )
-    ax.plot(
-        pareto["Curtailment Recovery (%)"],
-        pareto["Discounted LCOH (EUR/kg H2)"],
-        linewidth=1.5,
-        label="Pareto frontier",
-    )
+    ax2.set_ylabel("Discounted LCOH (€/kg H2)")
 
-    ax.scatter(
-        [recommended["Curtailment Recovery (%)"]],
-        [recommended["Discounted LCOH (EUR/kg H2)"]],
-        s=130,
-        marker="*",
+    balanced = table.loc[table["Balanced Compromise"]].iloc[0]
+    ax1.scatter(
+        [balanced["PEM Size (MW)"]],
+        [balanced["Curtailment Recovery (%)"]],
+        s=90,
         zorder=5,
-        label="Balanced compromise",
-    )
-    ax.annotate(
-        f"{recommended['PEM Size (MW)']:.2f} MW\n"
-        f"Recovery {recommended['Curtailment Recovery (%)']:.1f}%\n"
-        f"LCOH {recommended['Discounted LCOH (EUR/kg H2)']:.2f} €/kg\n"
-        f"NPV {recommended['NPV (EUR)']/1e6:.2f} M€",
-        xy=(recommended["Curtailment Recovery (%)"], recommended["Discounted LCOH (EUR/kg H2)"]),
-        xytext=(12, 18), textcoords="offset points",
-        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85),
-        arrowprops=dict(arrowstyle="->"),
-        fontsize=9,
+        label="Balanced compromise"
     )
 
-    cbar = fig.colorbar(sc, ax=ax)
-    cbar.set_label("NPV (M€)")
-    ax.set_xlabel("Curtailment Recovery (%)")
-    ax.set_ylabel("Discounted LCOH (€/kg H2)")
-    ax.set_title(fig_title)
-    ax.grid(True, alpha=0.3)
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(
-        os.path.join(FIGURES_DIR, f"figure{fig_number:02d}_multiobjective_pem_sizing.png"),
-        dpi=300, bbox_inches="tight"
+    ax1.set_title(fig_title)
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc="best")
+
+    plt.tight_layout()
+    plt.savefig(
+        os.path.join(
+            FIGURES_DIR,
+            f"figure{fig_number:02d}_multiobjective_pem_sizing.png"
+        ),
+        dpi=300,
+        bbox_inches="tight"
     )
     plt.show()
 
@@ -1621,15 +1664,8 @@ def plot_annualized_lcoh_vs_pem_size(results_table):
 
 
 ###
-def plot_curtailment_recovery_vs_pem_size(
-    pem_sizes_mw,
-    curtailment_recovery_results,
-    selected_design_mw=None,
-    selected_design_recovery=None,
-    full_recovery_mw=None,
-    full_recovery_pct=None,
-):
-    """Plot recovery curve and mark the selected and fine-sweep recovery points."""
+def plot_curtailment_recovery_vs_pem_size(pem_sizes_mw, curtailment_recovery_results):
+    """Plot recovery curve and explicitly mark the two engineering design points."""
     fig_number, fig_title = next_fig("Curtailment Recovery vs PEM Size")
     fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -1637,27 +1673,30 @@ def plot_curtailment_recovery_vs_pem_size(
     y = np.asarray(curtailment_recovery_results, dtype=float)
     ax.plot(x, y, marker="o", linewidth=1.8, label="Curtailment recovery")
 
-    if selected_design_mw is not None and selected_design_recovery is not None:
-        ax.scatter([selected_design_mw], [selected_design_recovery], s=90, zorder=5)
-        ax.annotate(
-            f"Multi-objective design\n{selected_design_mw:.2f} MW, "
-            f"{selected_design_recovery:.1f}% recovery",
-            xy=(selected_design_mw, selected_design_recovery),
-            xytext=(selected_design_mw + 0.35, max(selected_design_recovery - 14, 5)),
-            arrowprops=dict(arrowstyle="->"), fontsize=9,
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85)
-        )
+    # Design point 1: optimized balanced v1.5 reference design.
+    recovery_ref = float(np.interp(selected_pem_mw, x, y))
+    ax.scatter([selected_pem_mw], [recovery_ref], s=90, zorder=5)
+    ax.annotate(
+        f"Balanced reference design\n{selected_pem_mw:.2f} MW, {recovery_ref:.1f}% recovery",
+        xy=(selected_pem_mw, recovery_ref),
+        xytext=(selected_pem_mw + 0.35, max(recovery_ref - 12, 5)),
+        arrowprops=dict(arrowstyle="->"), fontsize=9,
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85)
+    )
 
-    if full_recovery_mw is not None and full_recovery_pct is not None:
-        ax.scatter([full_recovery_mw], [full_recovery_pct], s=90, zorder=5)
-        ax.annotate(
-            f"First fine-sweep size reaching ≥{FULL_RECOVERY_THRESHOLD_PCT:.1f}%\n"
-            f"{full_recovery_mw:.2f} MW, {full_recovery_pct:.1f}% recovery",
-            xy=(full_recovery_mw, full_recovery_pct),
-            xytext=(full_recovery_mw + 0.55, max(full_recovery_pct - 22, 5)),
-            arrowprops=dict(arrowstyle="->"), fontsize=9,
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85)
-        )
+    # Design point 2: smallest tested PEM size in the 2.0-2.5 MW benchmark
+    # range that reaches >=99% recovery. If neither does, show the better one.
+    candidates = [v for v in full_curtailment_benchmark_range_mw if v in x]
+    candidate_pairs = [(v, float(y[np.where(x == v)[0][0]])) for v in candidates]
+    qualifying = [(v, r) for v, r in candidate_pairs if r >= 99.0]
+    benchmark_mw, benchmark_recovery = (qualifying[0] if qualifying else max(candidate_pairs, key=lambda z: z[1]))
+    ax.scatter([benchmark_mw], [benchmark_recovery], s=90, zorder=5)
+    ax.annotate(
+        f"Full-curtailment benchmark\n{benchmark_mw:.1f} MW, {benchmark_recovery:.1f}% recovery",
+        xy=(benchmark_mw, benchmark_recovery), xytext=(benchmark_mw + 0.85, max(benchmark_recovery - 22, 5)),
+        arrowprops=dict(arrowstyle="->"), fontsize=9,
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85)
+    )
 
     ax.axhline(95, linestyle="--", linewidth=1.0, alpha=0.65, label="95% recovery")
     ax.axhline(99, linestyle=":", linewidth=1.0, alpha=0.65, label="99% recovery")
@@ -1899,7 +1938,7 @@ def plot_lcoh_vs_baseline_load_multi_price(hybrid_summary, reference_lcoh=None):
     marking the non-hybrid base-case LCOH, so the hybrid strategy can
     be visually checked against the v1.2 baseline.
     """
-    fig_number, fig_title = next_fig("LCOH vs Baseline Load (by Electricity Price)")
+    fig_number, fig_title = next_fig("LCOH vs Grid-Supported Baseline Load (by Electricity Price)")
     plt.figure(figsize=(10, 6))
 
     for price in sorted(hybrid_summary["Electricity Price (€/MWh)"].unique()):
@@ -1921,7 +1960,13 @@ def plot_lcoh_vs_baseline_load_multi_price(hybrid_summary, reference_lcoh=None):
             label=f"non-hybrid base case ({reference_lcoh:.2f} €/kg)"
         )
 
-    plt.xlabel("Baseline Load (% of PEM capacity)")
+    hybrid_baseline_ticks = sorted(hybrid_summary["Baseline Load (%)"].unique())
+    hybrid_baseline_labels = [
+        "0\n(PV-only hybrid)" if np.isclose(v, 0.0) else f"{v:g}"
+        for v in hybrid_baseline_ticks
+    ]
+    plt.xticks(hybrid_baseline_ticks, hybrid_baseline_labels)
+    plt.xlabel("Grid-Supported Baseline Load (% of PEM capacity)")
     plt.ylabel("Discounted LCOH (€/kg H2)")
     plt.title(fig_title)
     plt.grid(True)
@@ -1936,7 +1981,7 @@ def plot_lcoh_vs_baseline_load_multi_price(hybrid_summary, reference_lcoh=None):
 
 
 def plot_npv_vs_baseline_load_multi_price(hybrid_summary, reference_npv=None):
-    fig_number, fig_title = next_fig("NPV vs Baseline Load (by Electricity Price)")
+    fig_number, fig_title = next_fig("NPV vs Grid-Supported Baseline Load (by Electricity Price)")
     plt.figure(figsize=(10, 6))
 
     for price in sorted(hybrid_summary["Electricity Price (€/MWh)"].unique()):
@@ -1950,17 +1995,23 @@ def plot_npv_vs_baseline_load_multi_price(hybrid_summary, reference_npv=None):
             label=f"{price} €/MWh"
         )
 
-    plt.axhline(y=0, linestyle=":", color="gray", label="NPV = 0")
+    plt.axhline(y=0, linestyle=":", color="gray")
 
     if reference_npv is not None:
         plt.axhline(
             y=reference_npv / 1_000_000,
             linestyle="--",
             color="black",
-            label=f"Non-hybrid NPV = {reference_npv/1_000_000:+.2f} M€"
+            label=f"non-hybrid base case ({reference_npv/1_000_000:.2f} M€)"
         )
 
-    plt.xlabel("Baseline Load (% of PEM capacity)")
+    hybrid_baseline_ticks = sorted(hybrid_summary["Baseline Load (%)"].unique())
+    hybrid_baseline_labels = [
+        "0\n(PV-only hybrid)" if np.isclose(v, 0.0) else f"{v:g}"
+        for v in hybrid_baseline_ticks
+    ]
+    plt.xticks(hybrid_baseline_ticks, hybrid_baseline_labels)
+    plt.xlabel("Grid-Supported Baseline Load (% of PEM capacity)")
     plt.ylabel("NPV (M€)")
     plt.title(fig_title)
     plt.grid(True)
@@ -1998,9 +2049,12 @@ def plot_hybrid_strategy_heatmap(hybrid_summary, baseline_load_fractions, electr
     ax.set_xticks(range(len(pivot.columns)))
     ax.set_xticklabels([f"{v:g}" for v in pivot.columns])
     ax.set_yticks(range(len(pivot.index)))
-    ax.set_yticklabels([f"{v:.0f}" for v in pivot.index])
+    ax.set_yticklabels([
+        "0\n(PV-only hybrid)" if np.isclose(v, 0.0) else f"{v:.0f}"
+        for v in pivot.index
+    ])
     ax.set_xlabel("Electricity Price (€/MWh)")
-    ax.set_ylabel("Baseline Load (%)")
+    ax.set_ylabel("Grid-Supported Baseline Load (%)")
 
     # Numeric value in every cell
     for row_i in range(pivot.shape[0]):
@@ -2225,7 +2279,7 @@ def plot_daily_dispatch(df, selected_pem_mw, selected_grid_limit_mw, date_string
         color="0.25",
         linestyle="--",
         linewidth=1.5,
-        label=f"PEM rated capacity ({selected_pem_mw:.1f} MW)",
+        label=f"PEM rated capacity ({selected_pem_mw:.2f} MW)",
         zorder=4
     )
 
@@ -2258,7 +2312,7 @@ def plot_daily_dispatch(df, selected_pem_mw, selected_grid_limit_mw, date_string
 
     ax_pv.set_title(
         f"{fig_title}\n"
-        f"(PEM size = {selected_pem_mw:.1f} MW, "
+        f"(PEM size = {selected_pem_mw:.2f} MW, "
         f"baseline = {baseline_w/1_000_000:.2f} MW)"
     )
     ax_pv.grid(True, alpha=0.25)
@@ -2491,58 +2545,115 @@ utilization_results = []
 # ====== GRID LIMIT & CURTAILMENT SETUP =====
 selected_grid_limit_mw = 6
 
-# v1.4 fine-grid, three-objective PEM sizing.
-multiobjective_table, pareto_table, multiobjective_recommended, full_recovery_point = (
-    build_multiobjective_pem_sizing(df, selected_grid_limit_mw)
-)
-multiobjective_table.to_csv(
-    os.path.join(BASE_DIR, "multiobjective_pem_sizing.csv"), index=False
-)
-pareto_table.to_csv(
-    os.path.join(BASE_DIR, "pareto_pem_sizing.csv"), index=False
-)
-
-selected_pem_mw = float(multiobjective_recommended["PEM Size (MW)"])
-selected_pem_recovery_pct = float(multiobjective_recommended["Curtailment Recovery (%)"])
-full_recovery_mw_fine = float(full_recovery_point["PEM Size (MW)"])
-full_recovery_pct_fine = float(full_recovery_point["Curtailment Recovery (%)"])
-
-# Single-objective diagnostics are retained to show why a multi-objective decision is needed.
-economic_lcoh_row = multiobjective_table.loc[
-    multiobjective_table["Discounted LCOH (EUR/kg H2)"].idxmin()
-]
-npv_optimum_row = multiobjective_table.loc[multiobjective_table["NPV (EUR)"].idxmax()]
-
-print("\n=== v1.4 MULTI-OBJECTIVE PEM SIZING ===")
-print(
-    f"Balanced compromise: {selected_pem_mw:.2f} MW | "
-    f"Recovery {selected_pem_recovery_pct:.1f}% | "
-    f"LCOH {multiobjective_recommended['Discounted LCOH (EUR/kg H2)']:.2f} €/kg | "
-    f"NPV {multiobjective_recommended['NPV (EUR)']/1e6:.2f} M€"
-)
-print(
-    f"Minimum-LCOH point: {economic_lcoh_row['PEM Size (MW)']:.2f} MW | "
-    f"{economic_lcoh_row['Discounted LCOH (EUR/kg H2)']:.2f} €/kg"
-)
-print(
-    f"Maximum-NPV point: {npv_optimum_row['PEM Size (MW)']:.2f} MW | "
-    f"{npv_optimum_row['NPV (EUR)']/1e6:.2f} M€"
-)
-print(
-    f"First fine-sweep size at ≥{FULL_RECOVERY_THRESHOLD_PCT:.1f}% recovery: "
-    f"{full_recovery_mw_fine:.2f} MW"
-)
-print(f"Pareto-efficient candidates: {len(pareto_table)} of {len(multiobjective_table)}")
-
-# Source comparison now uses the multi-objective-selected PEM size.
+# v1.4 source comparison at the fixed engineering design point.
+# Both sources use the same 6 MW grid-export constraint and 1.55 MW balanced-reference PEM model.
 pv_source_comparison = build_pv_source_comparison(
     pvgis_df, pvsyst_df, selected_grid_limit_mw, selected_pem_mw
 )
 pv_source_comparison.to_csv(
-    os.path.join(BASE_DIR, "pv_source_comparison_summary.csv"), index=False
+    os.path.join(TABLES_DIR, "pv_source_comparison_summary.csv"), index=False
 )
 print("\nPVGIS vs PVsyst reference comparison:")
 print(pv_source_comparison.to_string(index=False, float_format=lambda x: f"{x:,.2f}"))
+
+
+# v1.5 fine multi-objective sizing using the current Tran-system SEC curve.
+multiobjective_pem_sizing = build_multiobjective_pem_sizing_table(
+    df=df,
+    grid_limit_mw=selected_grid_limit_mw,
+    capex_per_kw=pem_capex_per_kw,
+    hydrogen_price_eur_per_kg=hydrogen_sale_price,
+    discount_rate=discount_rate,
+    project_lifetime_years=project_lifetime_years
+)
+
+pareto_pem_sizing = multiobjective_pem_sizing[
+    multiobjective_pem_sizing["Pareto Efficient"]
+].copy()
+
+multiobjective_pem_sizing.to_csv(
+    os.path.join(TABLES_DIR, "multiobjective_pem_sizing.csv"),
+    index=False
+)
+
+pareto_pem_sizing.to_csv(
+    os.path.join(TABLES_DIR, "pareto_pem_sizing.csv"),
+    index=False
+)
+
+balanced_design, minimum_lcoh_design, maximum_npv_design, first_999_design = \
+    summarize_multiobjective_sizing(multiobjective_pem_sizing)
+
+print("\n=== v1.5 MULTI-OBJECTIVE PEM SIZING ===")
+print(
+    f"Balanced compromise: {balanced_design['PEM Size (MW)']:.2f} MW | "
+    f"Recovery {balanced_design['Curtailment Recovery (%)']:.1f}% | "
+    f"LCOH {balanced_design['Discounted LCOH (EUR/kg H2)']:.2f} €/kg | "
+    f"NPV {balanced_design['NPV (EUR)']/1e6:.2f} M€"
+)
+print(
+    f"Minimum-LCOH point: {minimum_lcoh_design['PEM Size (MW)']:.2f} MW | "
+    f"{minimum_lcoh_design['Discounted LCOH (EUR/kg H2)']:.2f} €/kg"
+)
+print(
+    f"Maximum-NPV point: {maximum_npv_design['PEM Size (MW)']:.2f} MW | "
+    f"{maximum_npv_design['NPV (EUR)']/1e6:.2f} M€"
+)
+if first_999_design is not None:
+    print(
+        f"First fine-sweep size at ≥99.9% recovery: "
+        f"{first_999_design['PEM Size (MW)']:.2f} MW"
+    )
+print(
+    f"Pareto-efficient candidates: "
+    f"{int(multiobjective_pem_sizing['Pareto Efficient'].sum())} "
+    f"of {len(multiobjective_pem_sizing)}"
+)
+
+# Ensure the fixed reporting reference matches the optimized balanced design.
+balanced_reference_mw = float(balanced_design["PEM Size (MW)"])
+if abs(selected_pem_mw - balanced_reference_mw) > 1e-9:
+    raise ValueError(
+        f"Configured selected_pem_mw={selected_pem_mw:.2f} MW does not match "
+        f"the optimized balanced design {balanced_reference_mw:.2f} MW."
+    )
+
+
+# Select PEM size automatically by MINIMUM opportunity-cost-adjusted LCOH
+# under the non-hybrid strategy and base-case CAPEX assumption.
+pem_sizing_lcoh_with_opportunity = []
+for candidate_pem_mw in pem_sizes_mw:
+    candidate_op = simulate_nonhybrid_operation(
+        df, candidate_pem_mw, selected_grid_limit_mw
+    )
+    candidate_capex_eur = candidate_pem_mw * 1000 * pem_capex_per_kw
+    candidate_fixed_opex_eur = candidate_capex_eur * pem_opex_fraction
+    candidate_opportunity_cost_eur, _ = calculate_2023_pv_opportunity_cost(
+        df, candidate_op["lost_export_w"]
+    )
+    candidate_lcoh = calculate_discounted_lcoh(
+        candidate_capex_eur,
+        candidate_fixed_opex_eur + candidate_opportunity_cost_eur,
+        candidate_op["annual_h2_kg"],
+        discount_rate,
+        project_lifetime_years
+    )
+    pem_sizing_lcoh_with_opportunity.append(candidate_lcoh)
+
+# Engineering design selection: use the optimized v1.5 balanced-reference design.
+# The purely economic minimum is still calculated above and reported as a diagnostic,
+# but it does not override the balanced multi-objective reference design.
+economic_optimum_index = int(np.nanargmin(pem_sizing_lcoh_with_opportunity))
+economic_optimum_pem_mw = float(pem_sizes_mw[economic_optimum_index])
+selected_pem_mw = 1.55
+
+print(
+    f"Selected balanced PEM design: {selected_pem_mw:.2f} MW"
+)
+print(
+    f"Economic minimum-LCOH diagnostic: {economic_optimum_pem_mw:.2f} MW "
+    f"({pem_sizing_lcoh_with_opportunity[economic_optimum_index]:.2f} €/kg H2)"
+)
 
 df["curtailed_power_w"], selected_curtailed_mwh = calculate_hourly_curtailment(df, selected_grid_limit_mw)
 selected_nonhybrid_op = simulate_nonhybrid_operation(
@@ -2581,7 +2692,7 @@ selected_water_m3 = (
 )
 
 print(f"\n--- SELECTED BASE CASE ---")
-print(f"PEM Size: {selected_pem_mw:.2f} MW (multi-objective balanced compromise)")
+print(f"PEM Size: {selected_pem_mw:.2f} MW (optimized balanced reference design)")
 print(f"Grid Export Limit: {selected_grid_limit_mw} MW")
 print(f"Curtailed PV Energy: {selected_curtailed_mwh:.1f} MWh/year")
 print(f"Hydrogen Production: {selected_h2_kg:.0f} kg/year")
@@ -2962,9 +3073,10 @@ for grid_limit, lcoh_s, lcoh_d in zip(grid_limits_mw, lcoh_grid_sensitivity, dis
 
 print(f"Dedicated PV-to-H2 LCOH (literature benchmark): {benchmark_dedicated_lcoh_low:.1f} - {benchmark_dedicated_lcoh_high:.1f} €/kg H2")
 
-# Selected design may lie between the coarse plotting sizes, so use the
-# directly simulated utilization instead of indexing pem_sizes_mw.
-selected_utilization = selected_nonhybrid_op["utilization_pct"]
+# The optimized balanced design (1.55 MW) is not necessarily present in the
+# coarse pem_sizes_mw sensitivity grid. Use the actual selected simulation
+# output instead of indexing the coarse list by MW value.
+selected_utilization = float(selected_nonhybrid_op["utilization_pct"])
 print(f"Note: the non-hybrid base-case LCOH reflects the selected dispatch and utilization ({selected_utilization:.2f}%).")
 
 # ===== NPV ANALYSIS =====
@@ -3274,18 +3386,45 @@ nonhybrid_break_even_h2_price = calculate_break_even_hydrogen_price(
     project_lifetime_years=project_lifetime_years
 )
 
-selected_recovery_pct = selected_pem_recovery_pct
-full_benchmark_mw = full_recovery_mw_fine
-full_benchmark_recovery_pct = full_recovery_pct_fine
+# Compute recovery directly for the selected balanced design because 1.55 MW
+# is a fine-sweep optimum and is not part of the coarse pem_sizes_mw grid.
+gross_no_pem_curtailment_w = np.maximum(
+    df["P"].to_numpy(dtype=float) - selected_grid_limit_mw * 1e6,
+    0.0
+)
+gross_no_pem_curtailment_mwh = gross_no_pem_curtailment_w.sum() / 1e6
+selected_residual_curtailment_mwh = (
+    selected_nonhybrid_op["residual_curtailment_w"].sum() / 1e6
+)
+selected_recovered_curtailment_mwh = max(
+    gross_no_pem_curtailment_mwh - selected_residual_curtailment_mwh,
+    0.0
+)
+selected_recovery_pct = (
+    selected_recovered_curtailment_mwh / gross_no_pem_curtailment_mwh * 100
+    if gross_no_pem_curtailment_mwh > 0 else 0.0
+)
+full_benchmark_candidates = [
+    p for p in full_curtailment_benchmark_range_mw if p in pem_sizes_mw
+]
+full_benchmark_mw = next(
+    (p for p in full_benchmark_candidates
+     if curtailment_recovery_results[pem_sizes_mw.index(p)] >= 99.0),
+    max(full_benchmark_candidates,
+        key=lambda p: curtailment_recovery_results[pem_sizes_mw.index(p)])
+)
+full_benchmark_recovery_pct = float(
+    curtailment_recovery_results[pem_sizes_mw.index(full_benchmark_mw)]
+)
 
 print("\n" + "=" * 72)
 print("FINAL BASE CASE SUMMARY")
 print("=" * 72)
 print(f"PV plant capacity:                    10.0 MWp")
 print(f"Grid export limit:                    {selected_grid_limit_mw:.1f} MW")
-print(f"Selected PEM capacity:                {selected_pem_mw:.1f} MW")
+print(f"Selected PEM capacity:                {selected_pem_mw:.2f} MW")
 print(f"Curtailment recovery:                 {selected_recovery_pct:.1f} %")
-print(f"First size at ≥99.9% recovery:         {full_benchmark_mw:.2f} MW ({full_benchmark_recovery_pct:.1f} % recovery)")
+print(f"Full-curtailment benchmark:           {full_benchmark_mw:.1f} MW ({full_benchmark_recovery_pct:.1f} % recovery)")
 print(f"Reference H2 selling price:           {hydrogen_sale_price:.2f} €/kg")
 print(f"H2 price sensitivity:                 {hydrogen_price_scenarios} €/kg")
 print("-")
@@ -3298,7 +3437,7 @@ print(f"NPV @ {hydrogen_sale_price:.2f} €/kg H2:                  {npv/1e6:.2f
 print(f"Economic result:                      {'PROFITABLE' if npv >= 0 else 'NOT PROFITABLE'}")
 print("-")
 print("SPECIFIC HYBRID DESIGN POINT")
-print(f"PEM capacity:                         {selected_pem_mw:.1f} MW")
+print(f"PEM capacity:                         {selected_pem_mw:.2f} MW")
 print(f"Requested baseline:                   {hybrid_design_baseline_fraction*100:.0f} % ({hybrid_design_baseline_fraction*selected_pem_mw:.2f} MW)")
 print(f"Grid electricity price assumption:    {hybrid_design_electricity_price_eur_per_mwh:.0f} €/MWh")
 print(f"Annual H2 production:                 {hybrid_design['H2 (kg/year)']:,.0f} kg/year")
@@ -3327,17 +3466,11 @@ plot_pv_source_power_duration(pvgis_df, pvsyst_df)
 
 pem_vs_hydrogen(pem_sizes_results, h2_results)
 pem_vs_utilization(pem_sizes_results, utilization_results)
+plot_multiobjective_pem_sizing(multiobjective_pem_sizing)
 
 plot_annualized_lcoh_vs_pem_size(results_table)
 
-plot_multiobjective_pem_sizing(multiobjective_table, multiobjective_recommended)
-plot_curtailment_recovery_vs_pem_size(
-    pem_sizes_mw, curtailment_recovery_results,
-    selected_design_mw=selected_pem_mw,
-    selected_design_recovery=selected_pem_recovery_pct,
-    full_recovery_mw=full_recovery_mw_fine,
-    full_recovery_pct=full_recovery_pct_fine,
-)
+plot_curtailment_recovery_vs_pem_size(pem_sizes_mw, curtailment_recovery_results)
 plot_curtailment_diagnostics(curtailment_diagnostics)
 
 capex_cols = ["PEM Size (MW)"] + [col for col in results_table.columns if "CAPEX" in col]

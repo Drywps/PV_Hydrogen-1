@@ -1,10 +1,10 @@
-# PV-to-Hydrogen Curtailment Utilisation in Cyprus — v1.4
+# PV-to-Hydrogen Curtailment Utilisation in Cyprus — v1.5
 
 ## Overview
 
 This project evaluates the technical and economic use of photovoltaic (PV) electricity for green-hydrogen production in Cyprus, with particular emphasis on PV curtailment, PEM electrolyser sizing and operating strategy.
 
-The model represents a **10 MWp PV plant**, an export-constrained grid connection and a **PEM electrolyser**. Version 1.4 extends the original PVGIS-based model by integrating a detailed **PVsyst** simulation and a **multi-objective PEM sizing framework**.
+The model represents a **10 MWp PV plant**, an export-constrained grid connection and a **PEM electrolyser**. Version 1.5 extends the original PVGIS-based model by integrating a detailed **PVsyst** simulation and a **multi-objective PEM sizing framework**.
 
 Two PV input sources are retained:
 
@@ -26,22 +26,24 @@ The project addresses the following question:
 
 > Under Cyprus PV-curtailment conditions, what PEM electrolyser size and operating strategy provide a reasonable trade-off between curtailment recovery, electrolyser utilisation, hydrogen production and economic performance?
 
-Version 1.4 adds a second question:
+Version 1.5 adds a second question:
 
 > How sensitive are the technical and economic conclusions to the PV generation dataset, and what PEM size emerges when curtailment recovery, LCOH and NPV are considered simultaneously rather than selecting a design point manually?
 
 ---
 
-## What is new in v1.4
+## What is new in v1.5
 
-Version 1.4 introduces four major changes:
+Version 1.5 consolidates the PVsyst/multi-objective framework and updates the PEM representation and final reporting reference:
 
-- **PVsyst integration** alongside the existing PVGIS 2023 dataset.
-- **PVGIS–PVsyst source comparison** using monthly energy and power-duration analyses.
-- **Fine-resolution multi-objective PEM sizing** from 0.10 to 3.00 MW in 0.01 MW increments.
-- **Pareto-front analysis** using curtailment recovery, discounted LCOH and NPV as simultaneous objectives.
+- **MW-scale PEM system SEC update** using the system-level partial-load results reported by Tran et al. (2026), Table 6.
+- **Explicit 15% minimum-load assumption** retained; the 15% SEC value is linearly extrapolated from the published 25% and 35% Tran points.
+- **Fine-resolution multi-objective sizing and Pareto exports** retained/restored in the final output structure.
+- **Balanced reference PEM size updated to 1.55 MW** under the active PVsyst TMY case.
+- **Hybrid figures clarified** by labelling the sensitivity variable as *Grid-Supported Baseline Load* and identifying 0% as *PV-only hybrid*.
+- **Independent EES physics-validation layer** retained separately from the annual Python dispatch/economic model.
 
-The previous v1.3 model remains the methodological basis for dispatch, PEM part-load behaviour and techno-economic accounting.
+The annual dispatch and techno-economic calculations remain implemented in Python. The EES model is not added on top of the Tran system SEC curve; it is used as a separate electrochemical/thermodynamic validation layer.
 
 ---
 
@@ -113,7 +115,7 @@ The export limit is treated as an exogenous representation of grid constraint se
 
 The code supports both PV datasets.
 
-The current v1.4 reference configuration uses:
+The current v1.5 reference configuration uses:
 
 ```text
 PV_DATA_SOURCE = PVSYST
@@ -180,35 +182,57 @@ and grid-electricity prices:
 
 The **0% hybrid baseline is not equivalent to the non-hybrid strategy**. It represents PV-priority PV-only operation, whereas the non-hybrid strategy first sustains minimum PEM load and then responds to curtailment.
 
+For this reason, v1.5 labels the hybrid sensitivity axis **Grid-Supported Baseline Load** and explicitly marks the 0% case as **PV-only hybrid**.
+
+At the representative **270 EUR/MWh** industrial grid-purchase benchmark, the 20% grid-supported baseline produces approximately **135,247 kg H2/year**, **52.33% utilisation**, **8.92 EUR/kg H2 LCOH** and **-2.23 MEUR NPV**. At this electricity price, the economically preferred hybrid sensitivity point is the **0% PV-only hybrid** case, with approximately **7.75 EUR/kg H2 LCOH** and **-0.67 MEUR NPV**. The non-hybrid 1.55 MW reference remains economically superior under the stated assumptions.
+
 ---
 
 ## PEM efficiency model
 
-Hydrogen production is calculated using a **load-dependent gross specific electricity-consumption (SEC) curve**, rather than a single constant kWh/kg value.
+Hydrogen production in the annual Python simulation is calculated using a **load-dependent MW-scale system specific electricity-consumption (SEC) curve**, rather than a single constant kWh/kg value.
 
-| PEM load | Gross SEC |
-|---:|---:|
-| 15% | 46.0 kWh/kg H2 |
-| 25% | 46.5 kWh/kg H2 |
-| 40% | 48.0 kWh/kg H2 |
-| 60% | 50.5 kWh/kg H2 |
-| 80% | 53.0 kWh/kg H2 |
-| 100% | 55.5 kWh/kg H2 |
+The v1.5 reference curve is based on Tran et al. (2026), *Hydrogen production system scaling using a high-fidelity simulation-optimization framework*, Energy Conversion and Management 357, 121416, Table 6. The published values are system-level values that include modelled Balance-of-Plant energy consumption.
 
-The curve is interpolated between the specified operating points.
+| PEM load | System SEC | Basis |
+|---:|---:|---|
+| 15% | 47.9 kWh/kg H2 | linear extrapolation |
+| 25% | 48.9 kWh/kg H2 | Tran et al. (2026) |
+| 35% | 49.9 kWh/kg H2 | Tran et al. (2026) |
+| 50% | 51.2 kWh/kg H2 | Tran et al. (2026) |
+| 65% | 52.2 kWh/kg H2 | Tran et al. (2026) |
+| 75% | 52.9 kWh/kg H2 | Tran et al. (2026) |
+| 85% | 53.4 kWh/kg H2 | Tran et al. (2026) |
+| 100% | 54.0 kWh/kg H2 | Tran et al. (2026) |
+
+The published Tran data cover 25–100% load. The **15% value is not a published Tran result**; it is an explicit linear extrapolation from the 25% and 35% values and is retained to preserve the project's 15% minimum-load assumption. Below 15% load, the PEM is treated as off. Linear interpolation is used between the tabulated points.
+
+For the selected 1.55 MW reference case, the load-weighted average system SEC is approximately **52.2 kWh/kg H2**.
 
 Other physical assumptions:
 
 - Hydrogen LHV: **33.33 kWh/kg**
 - Hydrogen exergy: **32.56 kWh/kg**
 - Water consumption: **9 L/kg H2**
-- Battery round-trip efficiency used for comparison: **90%**
+- Battery round-trip efficiency used for the simplified comparison: **90%**
+
+### EES physics-validation layer
+
+A separate **EES v2.7 Crespi-aligned PEM model** is used as an independent physics-validation layer for cell/stack voltage, current density, hydrogen production, efficiency and thermal output. It is not directly coupled into the hourly Python dispatch and is not added to the Tran system SEC values, avoiding double-counting of Balance-of-Plant losses.
+
+The intended methodology is therefore:
+
+```text
+Hourly PV / curtailment -> Python dispatch -> Tran-based system SEC -> annual H2 / LCOH / NPV
+                                      |
+                                      +-> EES electrochemical model used independently for physics validation
+```
 
 ---
 
 ## Multi-objective PEM sizing
 
-Version 1.4 replaces the manually selected 1.5 MW reference size with a formal multi-objective sizing analysis.
+Version 1.5 replaces the manually selected 1.5 MW reference size with a formal multi-objective sizing analysis.
 
 ### Search space
 
@@ -240,22 +264,22 @@ A single representative **balanced-compromise design** is then selected using eq
 
 This balanced design is a modelling choice for reporting purposes, **not a universal physical or economic optimum**. Different decision-maker priorities or objective weights can produce a different preferred PEM size.
 
-### v1.4 multi-objective result
+### v1.5 multi-objective result
 
-Using the active **PVsyst TMY** reference input:
+Using the active **PVsyst TMY 5.3** reference input:
 
-- Balanced-compromise PEM size: **1.54 MW**
-- Curtailment recovery: approximately **76.3%**
-- Discounted LCOH: approximately **6.40 EUR/kg H2**
-- NPV at 7 EUR/kg H2: approximately **+0.25 MEUR**
-- Minimum-LCOH point: approximately **0.10 MW**
-- Minimum LCOH: approximately **5.67 EUR/kg H2**
-- Maximum-NPV point: approximately **1.13 MW**
-- Maximum NPV: approximately **+0.29 MEUR**
-- First PEM size reaching at least **99.9% curtailment recovery**: approximately **2.44 MW**
-- Pareto-efficient candidates: **237 of 291**
+| Criterion | PEM size | Curtailment recovery | Discounted LCOH | NPV @ 7 EUR/kg H2 |
+|---|---:|---:|---:|---:|
+| **Balanced reference design** | **1.55 MW** | **76.64%** | **6.40 EUR/kg** | **+0.26 MEUR** |
+| Minimum-LCOH point | 0.10 MW | 5.96% | 5.61 EUR/kg | +0.04 MEUR |
+| Maximum-NPV point | 1.10 MW | 58.99% | 6.05 EUR/kg | +0.31 MEUR |
+| First point at >=99.9% recovery | 2.44 MW | 99.92% | 7.30 EUR/kg | -0.18 MEUR |
 
-The 1.54 MW point therefore represents a balanced trade-off rather than the minimum-cost, maximum-NPV or maximum-curtailment-recovery solution individually.
+The fine sweep contains **291 candidates**, of which **237 are Pareto-efficient** under the implemented objectives.
+
+The selected **1.55 MW** design produces approximately **50,044 kg H2/year**, has **19.23% energy-based utilisation**, avoids approximately **2,040.8 MWh/year** of the **2,662.8 MWh/year** gross curtailment and leaves approximately **622.0 MWh/year** residual curtailment.
+
+The selected point is deliberately a **balanced reporting reference**, not the single-objective economic optimum. The minimum-LCOH solution lies at the lower search bound, while maximum NPV occurs at 1.10 MW. This demonstrates the trade-off between curtailment recovery and electrolyser economics.
 
 ---
 
@@ -263,20 +287,20 @@ The 1.54 MW point therefore represents a balanced trade-off rather than the mini
 
 The two PV sources produce materially different curtailment conditions at the same nominal 10 MWp PV capacity and 6 MW export limit.
 
-For the earlier 1.5 MW PEM comparison:
+At the final **1.55 MW** reference PEM size:
 
-| Metric | PVGIS 2023 | PVsyst TMY |
+| Metric | PVGIS 2023 | PVsyst TMY 5.3 |
 |---|---:|---:|
 | Annual PV generation | 16,085.69 MWh | 19,174.59 MWh |
 | PV capacity factor | 18.36% | 21.89% |
 | Gross curtailment without PEM | 930.92 MWh | 2,662.82 MWh |
-| Curtailment recovery | 96.06% | 74.84% |
-| H2 production | 31,487.99 kg/year | 48,682.12 kg/year |
-| PEM utilisation | 11.74% | 19.37% |
-| Lost PV export | 648.68 MWh | 552.94 MWh |
-| PV opportunity cost | 105,171.82 EUR/year | 90,017.78 EUR/year |
-| Discounted LCOH | 10.33 EUR/kg | 6.37 EUR/kg |
-| NPV at 7 EUR/kg | -0.90 MEUR | +0.26 MEUR |
+| Curtailment recovery | 96.64% | 76.64% |
+| H2 production | 31,249.33 kg/year | 50,043.87 kg/year |
+| PEM utilisation | 11.55% | 19.23% |
+| Lost PV export | 668.91 MWh | 569.69 MWh |
+| PV opportunity cost | 108,486.12 EUR/year | 92,759.14 EUR/year |
+| Discounted LCOH | 10.75 EUR/kg | 6.40 EUR/kg |
+| NPV at 7 EUR/kg | -1.00 MEUR | +0.26 MEUR |
 
 These results demonstrate that the assumed PV-generation profile can materially change electrolyser utilisation, curtailment availability and project economics.
 
@@ -407,7 +431,7 @@ It should not be confused with the separate count of physical operating hours.
 
 ## Main interpretation
 
-Version 1.4 demonstrates several interacting engineering and economic effects:
+Version 1.5 demonstrates several interacting engineering and economic effects:
 
 - Increasing PEM size increases the ability to recover curtailed PV.
 - The marginal curtailment-recovery benefit falls as PEM capacity becomes large enough to absorb most curtailment events.
@@ -426,14 +450,14 @@ The purpose of the model is therefore **not to force a positive economic result*
 
 ## Figure set
 
-Version 1.4 produces **18 final figures**:
+Version 1.5 produces **18 final figures**:
 
 1. **Figure 1 — Monthly PV Energy: PVGIS 2023 vs PVsyst TMY 5.3**
 2. **Figure 2 — PV Power Duration: PVGIS vs PVsyst**
 3. **Figure 3 — PEM Size vs Hydrogen Production**
 4. **Figure 4 — PEM Size vs Utilisation**
-5. **Figure 5 — Annualised LCOH vs PEM Size**
-6. **Figure 6 — Multi-Objective PEM Sizing: Recovery vs LCOH vs NPV**
+5. **Figure 5 — Multi-Objective PEM Sizing: Recovery vs LCOH vs NPV**
+6. **Figure 6 — Annualised LCOH vs PEM Size**
 7. **Figure 7 — Curtailment Recovery vs PEM Size**
 8. **Figure 8 — Curtailment Avoided and Residual vs PEM Size**
 9. **Figure 9 — PEM Size vs One-Year CAPEX Intensity**
@@ -441,8 +465,8 @@ Version 1.4 produces **18 final figures**:
 11. **Figure 11 — LCOH vs Grid Export Limit**
 12. **Figure 12 — NPV vs Grid Export Limit**
 13. **Figure 13 — NPV Heatmap: Grid Limit vs Hydrogen Price**
-14. **Figure 14 — Hybrid LCOH vs Baseline Load by Electricity Price**
-15. **Figure 15 — Hybrid NPV vs Baseline Load by Electricity Price**
+14. **Figure 14 — Hybrid LCOH vs Grid-Supported Baseline Load by Electricity Price**
+15. **Figure 15 — Hybrid NPV vs Grid-Supported Baseline Load by Electricity Price**
 16. **Figure 16 — Hybrid Strategy LCOH Heatmap**
 17. **Figure 17 — Non-Hybrid Representative-Day Dispatch**
 18. **Figure 18 — Hybrid Representative-Day Dispatch**
@@ -457,7 +481,7 @@ results/figures/
 
 ## Output tables
 
-Version 1.4 also exports machine-readable result tables:
+Version 1.5 also exports machine-readable result tables:
 
 ### `multiobjective_pem_sizing.csv`
 
@@ -476,44 +500,6 @@ The tables are stored in:
 ```text
 results/tables/
 ```
-
----
-
-## Scientific basis and data sources
-
-The model distinguishes between **measured/software-generated input data**, **literature-based assumptions**, and **author-defined scenario assumptions**. This distinction is maintained to improve transparency and reproducibility.
-
-| Model element | Basis / source |
-|---|---|
-| Hourly PV generation — actual 2023 weather | European Commission **PVGIS** hourly time-series data |
-| Hourly PV generation — TMY system simulation | **PVsyst 8**, using PVGIS TMY 5.3 meteorological data and the system configuration documented in the repository |
-| PEM partial-load gross SEC | Literature-based approximation informed by experimental PEM-electrolyser performance reported by **Crespi et al. (2023)** |
-| Hydrogen LHV and water stoichiometry | Standard thermodynamic / electrochemical relations |
-| PEM CAPEX and OPEX scenarios | Literature / European hydrogen-sector benchmarks and explicit scenario assumptions |
-| Grid-export limits | Author-defined sensitivity scenarios representing different levels of grid constraint |
-| PV export opportunity cost | Historical 2023 Cyprus RES purchase-price proxy used as an economic modelling assumption |
-| Hybrid grid-electricity prices | Scenario sweep; 270 EUR/MWh retained as a representative 2023 industrial-price benchmark rather than a Day-Ahead Market price |
-| Multi-objective weighting | Author-defined equal-weight normalised-distance criterion used only to select a representative balanced-compromise point |
-
-Numerical assumptions that are not direct observations are therefore treated as **model inputs or scenarios rather than measured facts**. Sensitivity analysis is used where these assumptions can materially affect the conclusions.
-
-### Key scientific reference for PEM part-load behaviour
-
-Crespi, E., et al. (2023). *Experimental and theoretical evaluation of a 60 kW PEM electrolysis system for flexible dynamic operation*. **Energy Conversion and Management, 277**, 116622. https://doi.org/10.1016/j.enconman.2022.116622
-
-The current Python implementation uses a simplified gross-SEC curve derived as an engineering approximation from published PEM part-load behaviour; it does **not** claim to reproduce the complete experimental system or its balance-of-plant performance.
-
-### Planned EES electrochemical validation
-
-A physics-based PEM model in **Engineering Equation Solver (EES)** is planned as the next validation layer. The EES model will independently calculate reversible/Nernst voltage, activation losses, ohmic losses, concentration losses, Faradaic hydrogen production, stack efficiency and heat generation. After calibration against peer-reviewed experimental data, an EES-derived PEM performance map will be compared with the current empirical SEC representation and subsequently integrated into the hourly Python simulation.
-
-The intended modelling chain is:
-
-```text
-PVGIS / PVsyst -> Python hourly dispatch -> EES-validated PEM performance -> annual H2 -> sizing -> LCOH / NPV
-```
-
-This extension is intended to strengthen the connection between system-level techno-economic modelling and underlying PEM thermodynamics/electrochemistry.
 
 ---
 
@@ -540,7 +526,7 @@ This is a **first-order techno-economic screening model**, not an investment-gra
 
 Current limitations include:
 
-- simplified literature-based PEM partial-load SEC curve (physics-based EES validation planned)
+- literature-derived MW-scale PEM system SEC curve; the 15% point is extrapolated rather than directly published
 - no PEM stack degradation
 - no stack replacement schedule
 - no hydrogen compression model
@@ -617,7 +603,7 @@ dispatch and techno-economic optimisation.
 - **Matplotlib**
 - **PVGIS**
 - **PVsyst 8**
-- **Engineering Equation Solver (EES)** — planned electrochemical validation layer
+- **EES (Engineering Equation Solver)** — independent PEM physics-validation model
 
 ---
 
@@ -637,7 +623,8 @@ PV_Hydrogen-1/
 │
 ├── docs/
 │   ├── PVsyst_Report.pdf
-│   └── PVsyst_Loss_Diagram.pdf
+│   ├── PVsyst_Loss_Diagram.pdf
+│   └── EES_PEM_Model_v2.7.EES  # if included in the repository
 │
 └── results/
     ├── figures/
@@ -678,7 +665,7 @@ python main.py
 
 The model prints the main engineering and economic results to the console and generates the analysis outputs used by the project.
 
-The PV input source can be selected using the configuration in `main.py`. Version 1.4 uses the PVsyst dataset as the default reference input while retaining PVGIS for source sensitivity and comparison.
+The PV input source can be selected using the configuration in `main.py`. Version 1.5 uses the PVsyst dataset as the default reference input while retaining PVGIS for source sensitivity and comparison.
 
 ---
 
@@ -695,28 +682,24 @@ The repository includes:
 - the PV-source comparison table
 - the final figure set
 
-This allows the principal v1.4 calculations and reported results to be reproduced from the repository.
+This allows the principal v1.5 calculations and reported results to be reproduced from the repository.
 
 ---
 
 ## Version history
 
-### v1.4
+### v1.5
 
-- integrated PVsyst hourly AC output
-- retained PVGIS 2023 as a comparison dataset
-- added PVGIS–PVsyst monthly-energy comparison
-- added PV power-duration comparison
-- added explicit TMY-versus-actual-year interpretation
-- added fine PEM sizing sweep from 0.10 to 3.00 MW
-- added three-objective PEM sizing
-- added Pareto-front identification
-- added equal-weight balanced-compromise design selection
-- selected approximately 1.54 MW as the v1.4 balanced reference design under the active PVsyst case
-- added ≥99.9% curtailment-recovery sizing benchmark
-- added machine-readable sizing and source-comparison tables
-- expanded final figure set to 18 figures
-- reorganised repository outputs into `results/figures/` and `results/tables/`
+- replaced the earlier gross-SEC representation with the **Tran et al. (2026) MW-scale system SEC curve**
+- retained a 15% minimum operating load using an explicitly labelled extrapolated SEC point
+- updated the fine multi-objective sizing results using the v1.5 SEC model
+- selected **1.55 MW** as the final balanced reference design
+- identified **0.10 MW** as the minimum-LCOH diagnostic point and **1.10 MW** as the maximum-NPV point
+- retained **2.44 MW** as the first fine-sweep point reaching >=99.9% curtailment recovery
+- clarified the distinction between **non-hybrid** and **0% PV-only hybrid** dispatch
+- relabelled hybrid sensitivity figures using **Grid-Supported Baseline Load**
+- retained/restored structured `results/figures/` and `results/tables/` exports
+- retained **EES v2.7** as an independent Crespi-aligned PEM physics-validation layer rather than coupling it directly to the annual system SEC calculation
 
 ### v1.3
 
@@ -739,7 +722,7 @@ This allows the principal v1.4 calculations and reported results to be reproduce
 
 ## Status
 
-**v1.4 is the current stable version of the project.**
+**v1.5 is the current stable version of the project.**
 
 The project is intended as a transparent engineering and techno-economic portfolio/research model for examining the interaction between PV curtailment, electrolyser sizing, operating strategy and hydrogen economics in Cyprus.
 
