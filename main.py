@@ -4111,9 +4111,19 @@ def plot_daily_dispatch(df, selected_pem_mw, selected_grid_limit_mw, date_string
         marker="x",
         markersize=9,
         markeredgewidth=3,
-        label="PV generation during actual curtailment",
+        label="PV curtailment",
         zorder=7
     )
+
+    # Two extra display-only markers along the existing Strategy A PV segment.
+    # They interpolate the plotted curve and do not add dispatch observations.
+    if strategy != "hybrid":
+        extra_hours = np.array([10.5, 13.5])
+        within_curtailment = np.interp(extra_hours, hours, actual_curtailment_mask.astype(float)) > 0.99
+        extra_hours = extra_hours[within_curtailment]
+        ax_pv.plot(extra_hours, np.interp(extra_hours, hours, pv_display_mw),
+                   linestyle="None", marker="x", color="tab:red",
+                   markersize=9, markeredgewidth=3, zorder=7, label="_nolegend_")
 
     # Counterfactual no-PEM curtailment period, drawn along the PV curve for a
     # direct duration comparison with the red actual-curtailment segment.
@@ -4123,7 +4133,7 @@ def plot_daily_dispatch(df, selected_pem_mw, selected_grid_limit_mw, date_string
         color="0.45",
         linestyle="--",
         linewidth=2.8,
-        label="PV generation during curtailment without PEM",
+        label="PV curtailment without PEM",
         zorder=6,
     )
 
