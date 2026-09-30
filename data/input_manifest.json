@@ -1,0 +1,25 @@
+{
+  "release": "v1.9.1-final-screening",
+  "inputs": [
+    {
+      "path": "data/PVGIS_2023.csv",
+      "bytes": 485165,
+      "sha256": "f5447bbcde262cd89f9598fa0c842197c0ceecdbf3a37b030975602b914149c2"
+    },
+    {
+      "path": "data/PVsyst_TMY_5.3.csv",
+      "bytes": 484301,
+      "sha256": "95faebc36f1b6c804a485d531f967449ffeda3a954c18027ce0aedfeee39b0ce"
+    },
+    {
+      "path": "data/DSMK_DAM_2025-10-01_to_2026-09-24.xlsx",
+      "bytes": 341597,
+      "sha256": "a01251b723e8c0c237c0b5838c619f65724f33b83a1b637d87193475fdd20fdc"
+    },
+    {
+      "path": "ees/PEM_EES_performance_map.csv",
+      "bytes": 697,
+      "sha256": "e112266f89162d91d4002e6d0baaeb2d5bf52e35c00cd422a20dfeecaccbf843"
+    }
+  ]
+}

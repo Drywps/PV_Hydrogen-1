@@ -1,0 +1,10 @@
+v1.9.1-final-screening
+PASS: four input hashes and 17,230 unique DAM intervals over 359 days
+PASS: 8,760-hour PVSYST input, clipping and disclosed source repairs
+PASS: Strategy B energy, bounds, conditional selection and raised baseline
+PASS: PV-priority reference avoids import-service charges
+PASS: discounted LCOH/NPV cash flows without double-counted CAPEX
+PASS: BESS choice labels, incremental economics, losses and cyclic SOC
+PASS: all nine lifecycle cases and explicit validity warnings
+PASS: final report matches central result CSVs
+Internal consistency verified. Experimental/OEM validation is outside this check.

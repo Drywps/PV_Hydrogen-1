@@ -1,14 +1,26 @@
-# Python virtual environment
 venv/
 .venv/
-
-# VS Code local settings
 .vscode/
-
-# Python cache
 __pycache__/
 *.py[cod]
-
-# OS files
 .DS_Store
 Thumbs.db
+*.tmp
+terminal_output.txt
+# Generated diagnostics; only selected release outputs are tracked
+results/figures/*
+!results/figures/figure01_pvgis_vs_pvsyst_monthly_energy.png
+!results/figures/figure05_multiobjective_pem_sizing.png
+!results/figures/figure07_curtailment_recovery_vs_pem_size.png
+!results/figures/figure14_lcoh_vs_baseline_load.png
+!results/figures/figure15_npv_vs_baseline_load.png
+!results/figures/figure17_strategy_a_daily_dispatch.png
+!results/figures/figure18_strategy_b_daily_dispatch.png
+!results/figures/figure19_strategy_c_bess_duration_sensitivity.png
+results/tables/*
+!results/tables/strategy_b_reporting_cases.csv
+!results/tables/strategy_c_bess_best_nonzero_case.csv
+!results/tables/final_screening_summary.csv
+
+# User-supplied raw market input, excluded from public releases
+data/DSMK_DAM_*.xlsx
