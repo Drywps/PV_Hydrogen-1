@@ -4076,7 +4076,7 @@ def plot_daily_dispatch(df, selected_pem_mw, selected_grid_limit_mw, date_string
         gross_display_mask, pv_display_mw, np.nan
     )
 
-    # Orange outside actual curtailment, red dotted during actual curtailment.
+    # Orange outside actual curtailment, thick red crosses during actual curtailment.
     # No continuous orange curve remains underneath the red segment.
     pv_line_display_mw = np.where(
         ~actual_curtailment_mask,
@@ -4107,8 +4107,10 @@ def plot_daily_dispatch(df, selected_pem_mw, selected_grid_limit_mw, date_string
         hours,
         curtailed_pv_overlay_mw,
         color="tab:red",
-        linestyle=":",
-        linewidth=3.5,
+        linestyle="None",
+        marker="x",
+        markersize=9,
+        markeredgewidth=3,
         label="PV generation during actual curtailment",
         zorder=7
     )
@@ -4246,11 +4248,11 @@ def plot_daily_dispatch(df, selected_pem_mw, selected_grid_limit_mw, date_string
     ax_pv.legend(
         handles,
         labels,
-        loc="upper left",
-        bbox_to_anchor=(0.01, 0.99),
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.16),
         borderaxespad=0.0,
         fontsize=7.8 if strategy == "hybrid" else 8.5,
-        ncol=4 if strategy == "hybrid" else 3,
+        ncol=3,
         frameon=True,
         framealpha=0.92,
     )
@@ -4283,7 +4285,7 @@ def plot_daily_dispatch(df, selected_pem_mw, selected_grid_limit_mw, date_string
         f"H2={h2_day_kg:.1f} kg"
     )
 
-    fig.tight_layout(rect=(0, 0.035 if pv_display_correction_note else 0, 1, 1))
+    fig.subplots_adjust(left=0.085, right=0.985, top=0.86, bottom=0.31)
     output_strategy_label = "strategy_b" if strategy == "hybrid" else "strategy_a"
     save_figure_png(fig, 
         os.path.join(FIGURES_DIR, f"figure{fig_number:02d}_{output_strategy_label}_daily_dispatch.png"),
