@@ -22,5 +22,3 @@ results/tables/*
 !results/tables/strategy_c_bess_best_nonzero_case.csv
 !results/tables/final_screening_summary.csv
 
-# User-supplied raw market input, excluded from public releases
-data/DSMK_DAM_*.xlsx
