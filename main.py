@@ -2408,7 +2408,7 @@ def load_ees_performance_map(path=EES_PERFORMANCE_MAP_PATH):
         is_percent = load_text.str.endswith("%")
         numeric_load = pd.to_numeric(
             load_text.str.rstrip("%"), errors="coerce"
-        )
+        ).astype(float)
         numeric_load.loc[is_percent] = numeric_load.loc[is_percent] / 100.0
         ees_map["load_fraction"] = numeric_load
     required = {"load_fraction", "SEC_kWh_kg", "eta_LHV", "V_cell"}

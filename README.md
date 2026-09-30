@@ -44,6 +44,8 @@ Site: 35.141 N, 33.415 E, 142 m, PVGIS-SARAH3.
   model and are outside the tracked release.
 - Replaced UTF-16 dependencies with UTF-8 requirements and included the EES
   performance map. The raw DAM workbook is a user-supplied local input.
+- Converted EES load fractions to floating point before percentage normalization
+  to support pandas 3 without an integer-assignment error.
 
 ## Reproduction
 
@@ -214,4 +216,3 @@ See [verification result](results/verification.txt).
 
 The assumptions register and OEM comparison CSVs record evidence classes.
 Public OEM comparators are not project quotations.
-
