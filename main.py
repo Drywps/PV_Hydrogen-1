@@ -4012,10 +4012,36 @@ def plot_daily_dispatch(df, selected_pem_mw, selected_grid_limit_mw, date_string
     # PV trace does not imply artificial physical steps. This display-only
     # curve does not alter PEM dispatch, H2 production, energy or economics.
     pv_display_mw = pv_mw.copy()
+    pv_display_correction_note = None
     if use_dam_dispatch:
         hourly_anchor_mask = timestamps.dt.minute.to_numpy() == 0
         anchor_hours = hours[hourly_anchor_mask]
-        anchor_power = pv_mw[hourly_anchor_mask]
+        anchor_power = pv_mw[hourly_anchor_mask].copy()
+        # Explicit user-requested display correction for the same illustrative
+        # day. Keep the original time-series and dispatch calculations intact.
+        # Replace only the marked noon dip using its immediate hourly neighbours.
+        if date_string == "2025-10-20":
+            noon_indices = np.flatnonzero(np.isclose(anchor_hours, 12.0))
+            if len(noon_indices) == 1:
+                i = int(noon_indices[0])
+                if 0 < i < len(anchor_power) - 1 and anchor_power[i] < min(
+                    anchor_power[i - 1], anchor_power[i + 1]
+                ):
+                    original_noon_mw = float(anchor_power[i])
+                    anchor_power[i] = np.interp(
+                        anchor_hours[i],
+                        [anchor_hours[i - 1], anchor_hours[i + 1]],
+                        [anchor_power[i - 1], anchor_power[i + 1]],
+                    )
+                    pv_display_correction_note = (
+                        "PV display correction: noon dip interpolated from 11:00 and 13:00; "
+                        "calculations retain original input."
+                    )
+                    print(
+                        f"Figure 18 PV display correction [{date_string}, 12:00]: "
+                        f"{original_noon_mw:.3f} -> {anchor_power[i]:.3f} MW. "
+                        "Original PV input and dispatch unchanged."
+                    )
         if len(anchor_hours) >= 2:
             pv_display_mw = np.interp(hours, anchor_hours, anchor_power)
 
@@ -4196,6 +4222,9 @@ def plot_daily_dispatch(df, selected_pem_mw, selected_grid_limit_mw, date_string
         f"(PEM size = {selected_pem_mw:.2f} MW, "
         f"baseline = {baseline_w/1_000_000:.2f} MW)"
     )
+    if pv_display_correction_note:
+        fig.text(0.5, 0.005, pv_display_correction_note, ha="center", fontsize=8)
+
     ax_pv.grid(True, alpha=0.25)
 
     # One combined legend, ordered by physical meaning.
@@ -4254,7 +4283,7 @@ def plot_daily_dispatch(df, selected_pem_mw, selected_grid_limit_mw, date_string
         f"H2={h2_day_kg:.1f} kg"
     )
 
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, 0.035 if pv_display_correction_note else 0, 1, 1))
     output_strategy_label = "strategy_b" if strategy == "hybrid" else "strategy_a"
     save_figure_png(fig, 
         os.path.join(FIGURES_DIR, f"figure{fig_number:02d}_{output_strategy_label}_daily_dispatch.png"),

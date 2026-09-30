@@ -47,6 +47,11 @@ Site: 35.141 N, 33.415 E, 142 m, PVGIS-SARAH3.
 - Converted EES load fractions to floating point before percentage normalization
   to support pandas 3 without an integer-assignment error.
 
+Figure 18 retains 2025-10-20. Its marked noon PV dip is interpolated between
+11:00 and 13:00 for display only and annotated in the figure. The original
+PV input, dispatch, annual H2 and economic results are preserved. This is an
+illustration correction, not a verified source-data repair.
+
 ## Reproduction
 
 Use Python 3.10 or newer:
