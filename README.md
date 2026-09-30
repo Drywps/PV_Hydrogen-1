@@ -41,9 +41,9 @@ Version 1.5 consolidates the PVsyst/multi-objective framework and updates the PE
 - **Fine-resolution multi-objective sizing and Pareto exports** retained/restored in the final output structure.
 - **Balanced reference PEM size updated to 1.55 MW** under the active PVsyst TMY case.
 - **Hybrid figures clarified** by labelling the sensitivity variable as *Grid-Supported Baseline Load* and identifying 0% as *PV-only hybrid*.
-- **Independent EES physics-validation layer** retained separately from the annual Python dispatch/economic model.
+- **Independent EES electrochemical/thermodynamic cross-check layer** retained separately from the annual Python dispatch/economic model.
 
-The annual dispatch and techno-economic calculations remain implemented in Python. The EES model is not added on top of the Tran system SEC curve; it is used as a separate electrochemical/thermodynamic validation layer.
+The annual dispatch and techno-economic calculations remain implemented in Python. The EES model is not added on top of the Tran system SEC curve; it is used as a separate electrochemical/thermodynamic cross-check layer.
 
 ---
 
@@ -216,16 +216,16 @@ Other physical assumptions:
 - Water consumption: **9 L/kg H2**
 - Battery round-trip efficiency used for the simplified comparison: **90%**
 
-### EES physics-validation layer
+### EES electrochemical/thermodynamic cross-check layer
 
-A separate **EES v2.7 Crespi-aligned PEM model** is used as an independent physics-validation layer for cell/stack voltage, current density, hydrogen production, efficiency and thermal output. It is not directly coupled into the hourly Python dispatch and is not added to the Tran system SEC values, avoiding double-counting of Balance-of-Plant losses.
+A separate **EES v2.7 Crespi-aligned PEM model** is used as an independent electrochemical/thermodynamic cross-check for cell/stack voltage, current density, hydrogen production, efficiency and thermal output. It is not directly coupled into the hourly Python dispatch and is not added to the Tran system SEC values, avoiding double-counting of Balance-of-Plant losses.
 
 The intended methodology is therefore:
 
 ```text
 Hourly PV / curtailment -> Python dispatch -> Tran-based system SEC -> annual H2 / LCOH / NPV
                                       |
-                                      +-> EES electrochemical model used independently for physics validation
+                                      +-> EES electrochemical model used independently for cross-checking
 ```
 
 ---
@@ -503,7 +503,7 @@ results/tables/
 
 ---
 
-## Model validation and sanity checks
+## Model verification and sanity checks
 
 The code performs internal consistency checks including:
 
@@ -603,7 +603,7 @@ dispatch and techno-economic optimisation.
 - **Matplotlib**
 - **PVGIS**
 - **PVsyst 8**
-- **EES (Engineering Equation Solver)** — independent PEM physics-validation model
+- **EES (Engineering Equation Solver)** — independent PEM electrochemical/thermodynamic cross-check model
 
 ---
 
@@ -699,7 +699,7 @@ This allows the principal v1.5 calculations and reported results to be reproduce
 - clarified the distinction between **non-hybrid** and **0% PV-only hybrid** dispatch
 - relabelled hybrid sensitivity figures using **Grid-Supported Baseline Load**
 - retained/restored structured `results/figures/` and `results/tables/` exports
-- retained **EES v2.7** as an independent Crespi-aligned PEM physics-validation layer rather than coupling it directly to the annual system SEC calculation
+- retained **EES v2.7** as an independent Crespi-aligned PEM electrochemical/thermodynamic cross-check layer rather than coupling it directly to the annual system SEC calculation
 
 ### v1.3
 
